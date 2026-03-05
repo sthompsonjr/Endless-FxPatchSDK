@@ -380,6 +380,208 @@ static void testGrainScheduler() {
 }
 
 // ============================================================
+// BBDLine tests
+// ============================================================
+static void testBBDLine() {
+    std::printf("\n--- BBDLine ---\n");
+
+    BBDLine<1024> bbd;
+    bbd.init(48000.0f);
+    bbd.setDelaySamples(200.0f);
+    bbd.setCompanderAmount(0.3f);
+    bbd.setClockNoiseLevel(0.005f);
+
+    // Feed silence — output should be near-silent
+    float maxSilence = 0.0f;
+    for (int i = 0; i < 500; ++i) {
+        float out = bbd.process(0.0f);
+        if (fabsf(out) > maxSilence) maxSilence = fabsf(out);
+    }
+    check(maxSilence < 0.01f, "silence in -> near-silence out (clock noise only)");
+
+    // Feed an impulse and verify delayed output appears
+    bbd.reset();
+    bbd.setDelaySamples(200.0f);
+    bbd.setCompanderAmount(0.0f);
+    bbd.setClockNoiseLevel(0.0f);
+    (void)bbd.process(1.0f); // impulse
+
+    float delayedPeak = 0.0f;
+    for (int i = 0; i < 300; ++i) {
+        float out = bbd.process(0.0f);
+        if (fabsf(out) > delayedPeak) delayedPeak = fabsf(out);
+    }
+    check(delayedPeak > 0.1f, "impulse appears after delay time");
+
+    // Output stays in range with loud driven input
+    bbd.reset();
+    bbd.setCompanderAmount(0.8f);
+    bbd.setClockNoiseLevel(0.01f);
+    bool inRange = true;
+    for (int i = 0; i < 4800; ++i) {
+        float input = sinf(static_cast<float>(i) * 0.1f) * 0.9f;
+        float out = bbd.process(input);
+        if (fabsf(out) > 2.0f) { inRange = false; break; }
+    }
+    check(inRange, "output stays bounded with driven input");
+
+    // Compander adds harmonic content: RMS of soft-clipped > 0
+    bbd.reset();
+    bbd.setCompanderAmount(0.5f);
+    bbd.setClockNoiseLevel(0.0f);
+    bbd.setDelaySamples(1.0f); // minimal delay
+    float rmsComp = 0.0f;
+    for (int i = 0; i < 4800; ++i) {
+        float input = sinf(static_cast<float>(i) * 0.3f) * 0.8f;
+        float out = bbd.process(input);
+        rmsComp += out * out;
+    }
+    rmsComp = sqrtf(rmsComp / 4800.0f);
+    check(rmsComp > 0.1f, "compander passes signal with gain");
+
+    // Reconstruction lowpass attenuates high frequencies
+    bbd.reset();
+    bbd.setCompanderAmount(0.0f);
+    bbd.setClockNoiseLevel(0.0f);
+    bbd.setDelaySamples(1.0f);
+    // Feed Nyquist/4 signal (12kHz at 48kHz SR) — above 8kHz cutoff
+    float rmsHigh = 0.0f;
+    for (int i = 0; i < 4800; ++i) {
+        float input = (i % 4 < 2) ? 0.5f : -0.5f;
+        float out = bbd.process(input);
+        if (i > 480) rmsHigh += out * out; // skip transient
+    }
+    rmsHigh = sqrtf(rmsHigh / 4320.0f);
+    // Feed 1kHz signal — below cutoff
+    bbd.reset();
+    float rmsLow = 0.0f;
+    for (int i = 0; i < 4800; ++i) {
+        float input = sinf(static_cast<float>(i) * 6.283185307f * 1000.0f / 48000.0f) * 0.5f;
+        float out = bbd.process(input);
+        if (i > 480) rmsLow += out * out;
+    }
+    rmsLow = sqrtf(rmsLow / 4320.0f);
+    check(rmsLow > rmsHigh, "reconstruction LP attenuates above 8kHz vs below");
+}
+
+// ============================================================
+// AnalogLfo tests
+// ============================================================
+static void testAnalogLfo() {
+    std::printf("\n--- AnalogLfo ---\n");
+
+    AnalogLfo alfo;
+    alfo.init(48000.0f);
+    alfo.setFrequency(1.0f);
+    alfo.setShape(AnalogLfo::Shape::Sine);
+    alfo.setDriftAmount(0.012f);
+    alfo.setJitterAmount(0.0003f);
+
+    // Output stays in [-1, 1]
+    float minVal = 2.0f, maxVal = -2.0f;
+    for (int i = 0; i < 48000; ++i) {
+        float v = alfo.process();
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+    }
+    check(minVal >= -1.01f && maxVal <= 1.01f, "output stays in [-1, 1]");
+    check(maxVal > 0.95f, "reaches near +1");
+    check(minVal < -0.95f, "reaches near -1");
+
+    // Drift causes frequency variation: measure cycle lengths
+    alfo.reset();
+    alfo.setFrequency(10.0f); // 10 Hz -> ~4800 samples per cycle
+    alfo.setDriftAmount(0.05f); // exaggerate for testing
+
+    // Detect zero-crossings to measure cycle periods
+    float prev = alfo.process();
+    int crossings = 0;
+    int firstCrossAt = -1;
+    int cycleLengths[100] = {};
+    int prevCrossAt = 0;
+    int cycleIdx = 0;
+
+    for (int i = 1; i < 96000; ++i) { // 2 seconds
+        float cur = alfo.process();
+        // Rising zero-crossing
+        if (prev < 0.0f && cur >= 0.0f) {
+            if (firstCrossAt < 0) firstCrossAt = i;
+            if (crossings > 0 && cycleIdx < 100) {
+                cycleLengths[cycleIdx++] = i - prevCrossAt;
+            }
+            prevCrossAt = i;
+            crossings++;
+        }
+        prev = cur;
+    }
+
+    check(crossings > 15, "completes many cycles at 10 Hz");
+
+    // With drift, cycle lengths should vary (not all identical)
+    bool hasVariation = false;
+    if (cycleIdx >= 2) {
+        for (int i = 1; i < cycleIdx; ++i) {
+            if (cycleLengths[i] != cycleLengths[0]) {
+                hasVariation = true;
+                break;
+            }
+        }
+    }
+    check(hasVariation, "drift causes cycle length variation");
+
+    // Unipolar output in [0, 1]
+    alfo.reset();
+    alfo.setFrequency(1.0f);
+    alfo.setDriftAmount(0.012f);
+    float uniMin = 2.0f, uniMax = -1.0f;
+    for (int i = 0; i < 48000; ++i) {
+        float v = alfo.processUnipolar();
+        if (v < uniMin) uniMin = v;
+        if (v > uniMax) uniMax = v;
+    }
+    check(uniMin >= -0.01f && uniMax <= 1.01f, "unipolar in [0, 1]");
+
+    // getCurrentFrequency reflects drift
+    alfo.reset();
+    alfo.setFrequency(5.0f);
+    alfo.setDriftAmount(0.1f); // 10% drift for easy detection
+    float freqMin = 100.0f, freqMax = 0.0f;
+    for (int i = 0; i < 480000; ++i) { // 10 seconds to let drift oscillate
+        (void)alfo.process();
+        float f = alfo.getCurrentFrequency();
+        if (f < freqMin) freqMin = f;
+        if (f > freqMax) freqMax = f;
+    }
+    check(freqMax > 5.0f && freqMin < 5.0f, "getCurrentFrequency shows drift around center");
+    check((freqMax - freqMin) > 0.5f, "drift range is significant with 10% amount");
+
+    // All shapes work
+    AnalogLfo::Shape shapes[] = {
+        AnalogLfo::Shape::Sine,
+        AnalogLfo::Shape::Triangle,
+        AnalogLfo::Shape::Saw,
+        AnalogLfo::Shape::ReverseSaw,
+        AnalogLfo::Shape::Square,
+    };
+    bool allShapesOk = true;
+    for (auto s : shapes) {
+        alfo.reset();
+        alfo.setShape(s);
+        alfo.setFrequency(2.0f);
+        alfo.setDriftAmount(0.0f);
+        alfo.setJitterAmount(0.0f);
+        float sMin = 2.0f, sMax = -2.0f;
+        for (int i = 0; i < 48000; ++i) {
+            float v = alfo.process();
+            if (v < sMin) sMin = v;
+            if (v > sMax) sMax = v;
+        }
+        if (sMax < 0.9f || sMin > -0.9f) { allShapesOk = false; break; }
+    }
+    check(allShapesOk, "all shapes produce full-range output");
+}
+
+// ============================================================
 // Main
 // ============================================================
 int main() {
@@ -396,6 +598,8 @@ int main() {
     testSaturation();
     testGrainEnvelope();
     testGrainScheduler();
+    testBBDLine();
+    testAnalogLfo();
 
     std::printf("\n=== Results: %d / %d passed ===\n", passedTests, totalTests);
 

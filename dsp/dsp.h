@@ -11,3 +11,5 @@
 #include "Saturation.h"
 #include "GrainEnvelope.h"
 #include "GrainScheduler.h"
+#include "BBDLine.h"
+#include "AnalogLfo.h"
