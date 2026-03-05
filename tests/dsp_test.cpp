@@ -582,6 +582,151 @@ static void testAnalogLfo() {
 }
 
 // ============================================================
+// UniVibeLfo tests
+// ============================================================
+static void testUniVibeLfo() {
+    std::printf("\n--- UniVibeLfo ---\n");
+
+    UniVibeLfo uv;
+    uv.init(48000.0f);
+    uv.setRate(1.0f);
+    uv.setIntensity(1.0f);
+
+    // 1. Output range: all 4 LDR outputs stay in [0, 1] over 2 full cycles
+    bool rangeOk = true;
+    for (int i = 0; i < 96000; ++i) { // 2 seconds at 1 Hz
+        uv.process();
+        for (int s = 0; s < UniVibeLfo::kNumStages; ++s) {
+            float v = uv.getLdrOutput(s);
+            if (v < -0.001f || v > 1.001f) { rangeOk = false; break; }
+        }
+        float b = uv.getBulbBrightness();
+        if (b < -0.001f || b > 1.001f) { rangeOk = false; }
+    }
+    check(rangeOk, "all outputs in [0, 1] over 2 cycles");
+
+    // 2. Asymmetry: rise time should be faster than fall time
+    //    Let the thermal state settle for several cycles first, then measure.
+    //    Use min/max thresholds relative to the actual observed range.
+    uv.reset();
+    uv.setRate(1.0f);
+    uv.setIntensity(1.0f);
+
+    // Warm up for 5 cycles to let thermal lag reach steady state
+    for (int i = 0; i < 240000; ++i) uv.process();
+
+    // Now measure one full cycle — find the actual min and max
+    float cycleMin = 1.0f, cycleMax = 0.0f;
+    for (int i = 0; i < 48000; ++i) {
+        uv.process();
+        float v = uv.getLdrOutput(0);
+        if (v < cycleMin) cycleMin = v;
+        if (v > cycleMax) cycleMax = v;
+    }
+
+    float lo = cycleMin + 0.2f * (cycleMax - cycleMin);
+    float hi = cycleMin + 0.8f * (cycleMax - cycleMin);
+
+    // Measure rise and fall times on the next cycle
+    int riseStart = -1, riseEnd = -1, fallStart = -1, fallEnd = -1;
+    float prevOut2 = uv.getLdrOutput(0);
+    bool rising2 = true;
+    for (int i = 0; i < 96000; ++i) {
+        uv.process();
+        float out = uv.getLdrOutput(0);
+
+        if (rising2 && prevOut2 < lo && out >= lo && riseStart < 0) riseStart = i;
+        if (rising2 && prevOut2 < hi && out >= hi && riseEnd < 0) riseEnd = i;
+        if (rising2 && out < prevOut2 && riseEnd > 0) rising2 = false;
+
+        if (!rising2 && prevOut2 > hi && out <= hi && fallStart < 0) fallStart = i;
+        if (!rising2 && prevOut2 > lo && out <= lo && fallEnd < 0) fallEnd = i;
+
+        prevOut2 = out;
+        if (riseEnd > 0 && fallEnd > 0) break;
+    }
+
+    int riseTime = (riseStart >= 0 && riseEnd >= 0) ? (riseEnd - riseStart) : 99999;
+    int fallTime = (fallStart >= 0 && fallEnd >= 0) ? (fallEnd - fallStart) : 0;
+    check(riseTime < fallTime, "rise is faster than fall (Uni-Vibe asymmetry)");
+
+    // 3. Thermal compression: modulation depth at 10 Hz < depth at 1 Hz
+    auto measureDepth = [](float rate) {
+        UniVibeLfo uv2;
+        uv2.init(48000.0f);
+        uv2.setRate(rate);
+        uv2.setIntensity(1.0f);
+        float minV = 1.0f, maxV = 0.0f;
+        // Run 5 seconds to let thermal lag settle
+        for (int i = 0; i < 240000; ++i) {
+            uv2.process();
+            if (i > 48000) { // skip first second of settling
+                float v = uv2.getLdrOutput(0);
+                if (v < minV) minV = v;
+                if (v > maxV) maxV = v;
+            }
+        }
+        return maxV - minV;
+    };
+    float depth1Hz = measureDepth(1.0f);
+    float depth10Hz = measureDepth(10.0f);
+    check(depth10Hz < depth1Hz, "thermal compression: less depth at 10 Hz than 1 Hz");
+
+    // 4. Per-stage variation: the 4 outputs should NOT be identical
+    uv.reset();
+    uv.setRate(2.0f);
+    float sumDiff = 0.0f;
+    for (int i = 0; i < 48000; ++i) {
+        uv.process();
+        // Sum absolute differences between stage 0 and stage 1
+        sumDiff += fabsf(uv.getLdrOutput(0) - uv.getLdrOutput(1));
+    }
+    check(sumDiff > 1.0f, "per-stage variation: outputs differ between stages");
+
+    // 5. Intensity scaling: at intensity=0, outputs near 0
+    uv.reset();
+    uv.setRate(1.0f);
+    uv.setIntensity(0.0f);
+    float maxAtZero = 0.0f;
+    for (int i = 0; i < 48000; ++i) {
+        uv.process();
+        float v = uv.getLdrOutput(0);
+        if (v > maxAtZero) maxAtZero = v;
+    }
+    check(maxAtZero < 0.01f, "intensity=0 produces near-zero output");
+
+    // At intensity=1, should have significant swing
+    uv.reset();
+    uv.setIntensity(1.0f);
+    float maxAtFull = 0.0f;
+    for (int i = 0; i < 96000; ++i) {
+        uv.process();
+        float v = uv.getLdrOutput(0);
+        if (v > maxAtFull) maxAtFull = v;
+    }
+    check(maxAtFull > 0.5f, "intensity=1 produces significant output");
+
+    // 6. getBulbBrightness in [0, 1]
+    uv.reset();
+    uv.setRate(3.0f);
+    uv.setIntensity(1.0f);
+    bool bulbOk = true;
+    for (int i = 0; i < 48000; ++i) {
+        uv.process();
+        float b = uv.getBulbBrightness();
+        if (b < -0.001f || b > 1.001f) { bulbOk = false; break; }
+    }
+    check(bulbOk, "getBulbBrightness stays in [0, 1]");
+
+    // 7. Reset clears state
+    uv.setRate(1.0f);
+    for (int i = 0; i < 24000; ++i) uv.process(); // warm up
+    uv.reset();
+    check(approx(uv.getBulbBrightness(), 0.0f), "reset clears bulb state");
+    check(approx(uv.getLdrOutput(0), 0.0f), "reset clears LDR output");
+}
+
+// ============================================================
 // Main
 // ============================================================
 int main() {
@@ -600,6 +745,7 @@ int main() {
     testGrainScheduler();
     testBBDLine();
     testAnalogLfo();
+    testUniVibeLfo();
 
     std::printf("\n=== Results: %d / %d passed ===\n", passedTests, totalTests);
 
