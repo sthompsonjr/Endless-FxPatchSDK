@@ -11,3 +11,6 @@
 #include "NewtonRaphson.h"
 #include "WdfNonlinear.h"
 #include "WdfCircuits.h"
+#include "WdfOpAmpLM741.h"
+#include "WdfInvertingStage.h"
+#include "DOD250Circuit.h"

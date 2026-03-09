@@ -27,19 +27,21 @@ public:
     }
 
     [[nodiscard]] float process(float input) {
-        float output;
+        float output = 0.0f;
         switch (type_) {
             case Type::Lowpass:
                 y1_ = a0_ * input + b1_ * y1_;
                 output = y1_;
                 break;
             case Type::Highpass:
-                y1_ = a0_ * (input - x1_) + b1_ * y1_;
+                // H(z) = (1 - z^-1) / (1 - b1*z^-1), unity gain at Nyquist
+                y1_ = (input - x1_) + b1_ * y1_;
                 output = y1_;
                 x1_ = input;
                 break;
             case Type::DCBlock:
-                y1_ = a0_ * (input - x1_) + b1_ * y1_;
+                // H(z) = (1 - z^-1) / (1 - b1*z^-1), 10Hz cutoff
+                y1_ = (input - x1_) + b1_ * y1_;
                 output = y1_;
                 x1_ = input;
                 break;
