@@ -1,5 +1,8 @@
 #include "Patch.h"
 #include "../wdf/DOD250Circuit.h"
+#include "../dsp/ParameterSmoother.h"
+#include "../dsp/Saturation.h"
+#include <cmath>
 
 class PatchImpl : public Patch
 {
@@ -7,11 +10,14 @@ class PatchImpl : public Patch
     void init() override
     {
         circuit_.init(static_cast<float>(kSampleRate));
+        circuit_.setLevel(1.0f); // Hardware handles effect level
+
+        boostSmoother_.init(static_cast<float>(kSampleRate), 20.0f);
+        boostSmoother_.snapTo(1.0f); // Unity gain (no boost)
     }
 
     void setWorkingBuffer(std::span<float, kWorkingBufferSize> buffer) override
     {
-        // DOD 250 is purely real-time — no delay lines or looper memory needed.
         (void)buffer;
     }
 
@@ -22,14 +28,13 @@ class PatchImpl : public Patch
              leftIt != audioBufferLeft.end();
              ++leftIt, ++rightIt)
         {
-            if (bypassed_)
-            {
-                // True bypass: pass through unmodified
-                continue;
-            }
-
-            // Mono processing through DOD 250 circuit
             float out = circuit_.process(*leftIt);
+
+            // Apply boost (always runs smoother for click-free transitions)
+            float gain = boostSmoother_.process();
+            out *= gain;
+            out = sat::softClip(out);
+
             *leftIt = out;
             *rightIt = out;
         }
@@ -43,8 +48,8 @@ class PatchImpl : public Patch
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
             case 1: // Tone
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
-            case 2: // Level
-                return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
+            case 2: // Boost Level
+                return ParameterMetadata{ 0.0f, 1.0f, 0.0f };
             default:
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
         }
@@ -61,7 +66,12 @@ class PatchImpl : public Patch
                 circuit_.setTone(value);
                 break;
             case 2:
-                circuit_.setLevel(value);
+                // Boost Level: 0–1 maps to 0–20dB (1x to 10x linear gain)
+                boostGain_ = powf(10.0f, value);
+                if (boostEnabled_)
+                {
+                    boostSmoother_.setTarget(boostGain_);
+                }
                 break;
             default:
                 break;
@@ -76,7 +86,7 @@ class PatchImpl : public Patch
                 return paramIdx < 3;
 
             case ParamSource::kParamSourceExpression:
-                return paramIdx == 2; // Expression pedal controls Level
+                return paramIdx == 2; // Expression pedal controls Boost Level
 
             default:
                 return false;
@@ -87,18 +97,21 @@ class PatchImpl : public Patch
     {
         if (idx == static_cast<int>(endless::ActionId::kLeftFootSwitchPress))
         {
-            bypassed_ = !bypassed_;
+            boostEnabled_ = !boostEnabled_;
+            boostSmoother_.setTarget(boostEnabled_ ? boostGain_ : 1.0f);
         }
     }
 
     Color getStateLedColor() override
     {
-        return bypassed_ ? Color::kDimWhite : Color::kDarkRed;
+        return boostEnabled_ ? Color::kRed : Color::kDarkRed;
     }
 
   private:
     DOD250Circuit circuit_;
-    bool bypassed_ = false;
+    ParameterSmoother boostSmoother_;
+    float boostGain_ = 1.0f;
+    bool boostEnabled_ = false;
 };
 
 static PatchImpl patch;

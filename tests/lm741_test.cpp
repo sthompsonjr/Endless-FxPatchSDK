@@ -1,4 +1,6 @@
 #include "../wdf/wdf.h"
+#include "../dsp/Saturation.h"
+#include "../dsp/ParameterSmoother.h"
 
 #include <cmath>
 #include <cstdio>
@@ -320,6 +322,90 @@ static void testDOD250Circuit() {
 }
 
 // ============================================================
+// Clean Boost tests
+// ============================================================
+static void testCleanBoost() {
+    std::printf("\n--- Clean Boost ---\n");
+
+    // Boost gain mapping: 0 → 0dB (1x), 1 → +20dB (10x)
+    {
+        float gainAt0 = powf(10.0f, 0.0f);  // value=0
+        float gainAt1 = powf(10.0f, 1.0f);  // value=1
+        check(fabsf(gainAt0 - 1.0f) < 0.001f, "Boost value=0: gain = 1x (0dB)");
+        check(fabsf(gainAt1 - 10.0f) < 0.001f, "Boost value=1: gain = 10x (+20dB)");
+    }
+
+    // Moderate boost doesn't clip a small signal
+    {
+        DOD250Circuit dod;
+        dod.init(48000.0f);
+        dod.setGain(0.3f);
+        dod.setLevel(1.0f);
+        dod.setTone(1.0f);
+
+        float boostGain = powf(10.0f, 0.5f);  // +10dB ≈ 3.16x
+
+        // Process a quiet sine through circuit, then apply boost
+        float maxBoosted = 0.0f;
+        for (int i = 0; i < 48000; ++i) {
+            float input = 0.1f * sinf(static_cast<float>(i) * 6.283185307f * 440.0f / 48000.0f);
+            float out = dod.process(input);
+            float boosted = out * boostGain;
+            boosted = sat::softClip(boosted);
+            if (i > 4800 && fabsf(boosted) > maxBoosted)
+                maxBoosted = fabsf(boosted);
+        }
+        check(maxBoosted > 0.01f, "+10dB boost on quiet signal: output present");
+        check(maxBoosted <= 1.0f, "+10dB boost on quiet signal: within soft clip range");
+    }
+
+    // High boost on circuit output: soft clip limits final output
+    {
+        DOD250Circuit dod;
+        dod.init(48000.0f);
+        dod.setGain(0.7f);
+        dod.setLevel(1.0f);
+        dod.setTone(1.0f);
+
+        float boostGain = powf(10.0f, 1.0f);  // +20dB = 10x
+
+        float maxClipped = 0.0f;
+        bool hasOutput = false;
+        for (int i = 0; i < 48000; ++i) {
+            float input = 0.5f * sinf(static_cast<float>(i) * 6.283185307f * 440.0f / 48000.0f);
+            float out = dod.process(input);
+            float boosted = sat::softClip(out * boostGain);
+            if (i > 4800) {
+                if (fabsf(boosted) > maxClipped) maxClipped = fabsf(boosted);
+                if (fabsf(boosted) > 0.01f) hasOutput = true;
+            }
+        }
+        check(hasOutput, "+20dB boost: produces output");
+        check(maxClipped <= 1.0f, "+20dB boost: soft clip keeps output <= 1.0");
+    }
+
+    // ParameterSmoother provides click-free transition
+    {
+        ParameterSmoother smoother;
+        smoother.init(48000.0f, 20.0f);
+        smoother.snapTo(1.0f);
+        smoother.setTarget(10.0f);  // jump to +20dB
+
+        float prev = 1.0f;
+        float maxStep = 0.0f;
+        for (int i = 0; i < 4800; ++i) {
+            float val = smoother.process();
+            float step = fabsf(val - prev);
+            if (step > maxStep) maxStep = step;
+            prev = val;
+        }
+        // Smoother should prevent instantaneous jumps
+        check(maxStep < 1.0f, "Boost smoother: no instantaneous jump (max step < 1.0)");
+        check(fabsf(prev - 10.0f) < 0.1f, "Boost smoother: converges to target");
+    }
+}
+
+// ============================================================
 // Performance benchmark
 // ============================================================
 static void testPerformance() {
@@ -409,6 +495,7 @@ int main() {
     testLM741OpenLoop();
     testInvertingStage();
     testDOD250Circuit();
+    testCleanBoost();
     testPerformance();
 
     std::printf("\n=== Results: %d / %d passed ===\n", passedTests, totalTests);
