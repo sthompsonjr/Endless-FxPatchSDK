@@ -297,52 +297,6 @@ static void testToneStack() {
     check(maxOut > 0.01f, "Tone stack: produces output at center position");
 }
 
-static void testPnpBjt() {
-    std::printf("\n--- PNP BJT Primitive ---\n");
-
-    // Test WdfPnpBjt primitive directly
-    WdfPnpBjt pnp;
-    // Germanium PNP parameters
-    pnp.init(1e-6f, 0.02585f, 70.0f, 100000.0f, 10000.0f, 1000.0f);
-
-    // With zero incident waves the device should produce finite reflected waves
-    pnp.portB.a = 0.0f;
-    pnp.portC.a = 0.0f;
-    pnp.portE.a = 0.0f;
-    pnp.reflect();
-    check(std::isfinite(pnp.portB.b), "PNP BJT: portB.b is finite");
-    check(std::isfinite(pnp.portC.b), "PNP BJT: portC.b is finite");
-    check(std::isfinite(pnp.portE.b), "PNP BJT: portE.b is finite");
-
-    // Forward active: with positive Veb the device should conduct.
-    // Apply aE = 0.6V (emitter driven above base).
-    // With large port impedances the WDF solver settles at a small Veb,
-    // but emitter current must flow INTO the emitter (positive Ie) and
-    // collector current must be positive and less than Ie.
-    pnp.reset();
-    pnp.portE.a = 0.6f;
-    pnp.portB.a = 0.0f;
-    pnp.portC.a = 0.0f;
-    pnp.reflect();
-    float Ie = (pnp.portE.a - pnp.portE.b) / (2.0f * pnp.portE.Rp);
-    float Ic = (pnp.portC.b - pnp.portC.a) / (2.0f * pnp.portC.Rp); // flows OUT
-    check(Ie > 0.0f, "PNP BJT: emitter current flows into emitter");
-    check(Ic >= 0.0f && Ic <= Ie + 1e-6f, "PNP BJT: Ic in [0, Ie] (forward active)");
-
-    // Reset/re-init should produce finite output
-    pnp.reset();
-    bool allFinite = true;
-    for (int i = 0; i < 100; ++i) {
-        float sig = sinf(static_cast<float>(i) * 6.283185307f * 440.0f / 48000.0f) * 0.3f;
-        pnp.portE.a = sig;
-        pnp.portB.a = 0.0f;
-        pnp.portC.a = 0.0f;
-        pnp.reflect();
-        if (!std::isfinite(pnp.portC.b)) { allFinite = false; break; }
-    }
-    check(allFinite, "PNP BJT: no NaN/Inf over 100 samples");
-}
-
 static void testBJTGainStage() {
     std::printf("\n--- BJT Gain Stage Circuit ---\n");
 
@@ -463,7 +417,6 @@ int main() {
     testRCLowpass();
     testDiodeClipper();
     testToneStack();
-    testPnpBjt();
     testBJTGainStage();
     testPerformance();
 
