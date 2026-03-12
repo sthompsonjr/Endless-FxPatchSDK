@@ -2,3 +2,5 @@
 build*/
 dsp_test
 wdf_test
+lm741_test
+photoresistor_test
