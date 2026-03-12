@@ -14,3 +14,5 @@
 #include "WdfOpAmpLM741.h"
 #include "WdfInvertingStage.h"
 #include "DOD250Circuit.h"
+#include "WdfOpAmpJRC4558.h"
+#include "WdfTubescreamerCircuit.h"
