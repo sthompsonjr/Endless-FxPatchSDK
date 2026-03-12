@@ -229,3 +229,86 @@ private:
     float prevVbe_ = 0.6f;
     float prevVce_ = 5.0f;
 };
+
+/// WDF Single Diode to Ground — asymmetric clipping.
+///
+/// Unlike WdfIdealDiode (which is a series element), this models a single
+/// diode shunting signal to ground. It clips the positive half of the signal
+/// (forward-biased) while the negative half passes through limited only by
+/// the op-amp rail voltage.
+///
+/// Used in the ProCo RAT distortion pedal where a single 1N914 diode
+/// provides the signature asymmetric clipping character.
+///
+/// Uses Lambert W to solve the Thevenin diode equation analytically:
+///   Vs = Vd + Rp*Is*(exp(Vd/Vt) - 1)  where Vs = a (incident wave)
+///   Solution: Vd = a + RIs - Vt * W0(RIs/Vt * exp((a + RIs)/Vt))
+///
+/// Note: This differs from WdfIdealDiode's formula (which is designed for
+/// use within a WDF tree). This formulation directly computes the diode
+/// forward voltage as a one-port shunt element.
+class WdfDiodeToGround {
+public:
+    WdfPort port;
+
+    void init(float saturationCurrent, float thermalVoltage, float portResistance) {
+        Is_ = std::max(saturationCurrent, 1e-15f);
+        Vt_ = std::max(thermalVoltage, 1e-6f);
+        port.Rp = std::max(portResistance, 1e-9f);
+        RIs_ = Is_ * port.Rp;
+        invVt_ = 1.0f / Vt_;
+        port.reset();
+    }
+
+    void reflect() noexcept {
+        // Single diode: only conducts when forward-biased (positive voltage).
+        // For negative incident waves, diode is off → open circuit (b = a).
+        if (port.a <= 0.0f) {
+            port.b = port.a;
+            return;
+        }
+        // Forward-biased: solve Vs = Vd + Rp*Is*(exp(Vd/Vt) - 1)
+        // Vd = a + RIs - Vt * W0(RIs/Vt * exp((a + RIs)/Vt))
+        float expArg = std::clamp((port.a + RIs_) * invVt_, -80.0f, 80.0f);
+        float arg = (RIs_ * invVt_) * expf(expArg);
+        float wArg = math::lambertW0(arg);
+        float V = port.a + RIs_ - Vt_ * wArg;
+        port.b = 2.0f * V - port.a;
+    }
+
+    void reset() noexcept { port.reset(); }
+
+    /// Factory: 1N914 silicon signal diode (Is = 1e-7 A)
+    static WdfDiodeToGround make1N914(float portResistance) {
+        WdfDiodeToGround d;
+        d.init(1e-7f, 0.02585f, portResistance);
+        return d;
+    }
+
+    /// Factory: 1N4148 silicon signal diode (Is = 2.52e-9 A)
+    static WdfDiodeToGround make1N4148(float portResistance) {
+        WdfDiodeToGround d;
+        d.init(2.52e-9f, 0.02585f, portResistance);
+        return d;
+    }
+
+    /// Factory: Germanium diode (Is = 1e-6 A, lower Vf ~0.3V)
+    static WdfDiodeToGround makeGermanium(float portResistance) {
+        WdfDiodeToGround d;
+        d.init(1e-6f, 0.02585f, portResistance);
+        return d;
+    }
+
+    /// Factory: LED (Is = 1e-18 A, high Vf ~1.6V)
+    static WdfDiodeToGround makeLED(float portResistance) {
+        WdfDiodeToGround d;
+        d.init(1e-18f, 0.02585f, portResistance);
+        return d;
+    }
+
+private:
+    float Is_ = 1e-7f;
+    float Vt_ = 0.02585f;
+    float RIs_ = 0.0f;
+    float invVt_ = 1.0f / 0.02585f;
+};
