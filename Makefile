@@ -143,13 +143,16 @@ active-effect:
 .PHONY: headers-check
 headers-check:
 	@echo "Checking all headers compile clean..."
-	@for f in $(SDK_DIR)/*.h; do \
-	    g++ -std=c++20 -I. -I./$(SDK_DIR) -I./$(DSP_DIR) -I./$(WDF_DIR) \
+	@fail=0; \
+	for f in $(SDK_DIR)/*.h $(DSP_DIR)/*.h $(WDF_DIR)/*.h; do \
+	    [ -f "$$f" ] || continue; \
+	    errors=$$(g++ -std=c++20 -I. -I./$(SDK_DIR) -I./$(DSP_DIR) -I./$(WDF_DIR) \
 	        -Wall -Wdouble-promotion -fsyntax-only "$$f" 2>&1 \
-	    && echo "OK: $$f" || echo "FAIL: $$f"; \
-	done
-	@for f in $(DSP_DIR)/*.h $(WDF_DIR)/*.h; do \
-	    [ -f "$$f" ] && g++ -std=c++20 -I. -I./$(SDK_DIR) -I./$(DSP_DIR) -I./$(WDF_DIR) \
-	        -Wall -Wdouble-promotion -fsyntax-only "$$f" 2>&1 \
-	    && echo "OK: $$f" || echo "SKIP: $$f (no files)"; \
-	done
+	        | grep -E 'error:'); \
+	    if [ -z "$$errors" ]; then \
+	        echo "OK: $$f"; \
+	    else \
+	        echo "FAIL: $$f"; echo "$$errors"; fail=1; \
+	    fi; \
+	done; \
+	if [ $$fail -eq 1 ]; then exit 1; fi

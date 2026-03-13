@@ -1,6 +1,5 @@
 #include "sdk/Patch.h"
-#include "wdf/DOD250Circuit.h"
-#include "dsp/ParameterSmoother.h"
+#include "wdf/WdfRatCircuit.h"
 #include "dsp/Saturation.h"
 #include <cmath>
 
@@ -10,10 +9,9 @@ class PatchImpl : public Patch
     void init() override
     {
         circuit_.init(static_cast<float>(kSampleRate));
-        circuit_.setLevel(1.0f); // Hardware handles effect level
-
-        boostSmoother_.init(static_cast<float>(kSampleRate), 20.0f);
-        boostSmoother_.snapTo(1.0f); // Unity gain (no boost)
+        circuit_.setVolume(0.5f);
+        circuit_.setDistortion(0.5f);
+        circuit_.setFilter(0.5f);
     }
 
     void setWorkingBuffer(std::span<float, kWorkingBufferSize> buffer) override
@@ -29,12 +27,6 @@ class PatchImpl : public Patch
              ++leftIt, ++rightIt)
         {
             float out = circuit_.process(*leftIt);
-
-            // Apply boost (always runs smoother for click-free transitions)
-            float gain = boostSmoother_.process();
-            out *= gain;
-            out = sat::softClip(out);
-
             *leftIt = out;
             *rightIt = out;
         }
@@ -44,12 +36,12 @@ class PatchImpl : public Patch
     {
         switch (paramIdx)
         {
-            case 0: // Gain
+            case 0: // Distortion
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
-            case 1: // Tone
+            case 1: // Filter (REVERSED: 0=bright, 1=dark)
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
-            case 2: // Boost Level
-                return ParameterMetadata{ 0.0f, 1.0f, 0.0f };
+            case 2: // Volume
+                return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
             default:
                 return ParameterMetadata{ 0.0f, 1.0f, 0.5f };
         }
@@ -60,18 +52,14 @@ class PatchImpl : public Patch
         switch (idx)
         {
             case 0:
-                circuit_.setGain(value);
+                circuit_.setDistortion(value);
                 break;
             case 1:
-                circuit_.setTone(value);
+                // Filter: 0 = bright (20kHz), 1 = dark (2kHz)
+                circuit_.setFilter(value);
                 break;
             case 2:
-                // Boost Level: 0–1 maps to 0–20dB (1x to 10x linear gain)
-                boostGain_ = powf(10.0f, value);
-                if (boostEnabled_)
-                {
-                    boostSmoother_.setTarget(boostGain_);
-                }
+                circuit_.setVolume(value);
                 break;
             default:
                 break;
@@ -86,7 +74,7 @@ class PatchImpl : public Patch
                 return paramIdx < 3;
 
             case ParamSource::kParamSourceExpression:
-                return paramIdx == 2; // Expression pedal controls Boost Level
+                return paramIdx == 0; // Expression pedal controls Distortion
 
             default:
                 return false;
@@ -97,21 +85,37 @@ class PatchImpl : public Patch
     {
         if (idx == static_cast<int>(endless::ActionId::kLeftFootSwitchPress))
         {
-            boostEnabled_ = !boostEnabled_;
-            boostSmoother_.setTarget(boostEnabled_ ? boostGain_ : 1.0f);
+            // Tap: cycle through RAT variants
+            int next = (static_cast<int>(currentVariant_) + 1)
+                       % static_cast<int>(RatVariant::kCount);
+            currentVariant_ = static_cast<RatVariant>(next);
+            circuit_.setVariant(currentVariant_);
+        }
+        else if (idx == static_cast<int>(endless::ActionId::kLeftFootSwitchHold))
+        {
+            // Hold: cycle slew character (Stock → Fast → Slow)
+            slewMode_ = (slewMode_ + 1) % 3;
+            circuit_.setSlewCharacter(slewMode_);
         }
     }
 
     Color getStateLedColor() override
     {
-        return boostEnabled_ ? Color::kRed : Color::kDarkRed;
+        switch (currentVariant_)
+        {
+            case RatVariant::Original:     return Color::kRed;
+            case RatVariant::TurboRat:     return Color::kLightYellow;
+            case RatVariant::YouDirtyRat:  return Color::kDarkLime;
+            case RatVariant::WhiteRat:     return Color::kDimWhite;
+            case RatVariant::GermaniumMod: return Color::kMagenta;
+            default:                       return Color::kRed;
+        }
     }
 
   private:
-    DOD250Circuit circuit_;
-    ParameterSmoother boostSmoother_;
-    float boostGain_ = 1.0f;
-    bool boostEnabled_ = false;
+    WdfRatCircuit circuit_;
+    RatVariant currentVariant_ = RatVariant::Original;
+    int slewMode_ = 0;
 };
 
 static PatchImpl patch;
