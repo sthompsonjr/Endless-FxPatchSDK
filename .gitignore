@@ -1,2 +1,10 @@
-
+build/
 build*/
+_conflicts/
+*.bin
+*.elf
+*.o
+*.su
+.DS_Store
+Thumbs.db
+Makefile.orig
