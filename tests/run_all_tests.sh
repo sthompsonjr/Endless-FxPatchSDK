@@ -60,6 +60,7 @@ run_test "ota"
 run_test "photoresistor"
 run_test "spring_reverb"
 run_test "lm308_rat"
+run_test "ReverbPrimitives"
 
 echo ""
 echo "======================================"
