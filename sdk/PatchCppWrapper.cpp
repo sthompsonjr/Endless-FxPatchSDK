@@ -1,5 +1,5 @@
 #include "PatchCppWrapper.h"
-#include "../source/Patch.h"
+#include "Patch.h"
 
 #include <string.h>
 
