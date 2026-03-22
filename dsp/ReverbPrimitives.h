@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CircularBuffer.h"
+#include <algorithm>
 #include <cmath>
 
 template<size_t Size>
@@ -103,3 +104,104 @@ inline void hadamard8(float* x) noexcept
 }
 
 } // namespace fdn
+
+// ════════════════════════════════════════════════════════════════════════════
+// ModulatedAllpassDelay — LFO-swept Schroeder allpass diffuser
+// ════════════════════════════════════════════════════════════════════════════
+
+static constexpr float kTwoPi = 6.28318530f;
+
+namespace modulated_allpass {
+
+constexpr float kDefaultGain = 0.6f;
+constexpr float kMinCenterDelaySamples = 4.0f;
+constexpr float kMaxDepthSamples = 64.0f;
+constexpr int kHermiteGuard = 3;
+
+} // namespace modulated_allpass
+
+/// Schroeder allpass diffuser with sinusoidal LFO delay modulation.
+///
+/// Transfer function: H(z) = (z^(-D) - g) / (1 - g*z^(-D))   |H| = 1 for all w
+/// Delay D is modulated: D(n) = center + depth * sin(2*pi * phase(n))
+///
+/// Used in FDN reverb diffusion chains (Lexicon 224-style).
+/// Each instance owns its LFO phase — stagger initialPhase across instances
+/// to prevent coherent modulation.
+///
+/// @tparam Size  Power-of-2 buffer size in samples.
+template<size_t Size>
+class ModulatedAllpassDelay {
+public:
+    void init(float centerDelaySamples,
+              float gain,
+              float rateHz,
+              float depthSamples,
+              float sampleRate,
+              float initialPhase = 0.0f) {
+        g_ = std::clamp(gain, -0.999f, 0.999f);
+        depth_ = std::clamp(depthSamples, 0.0f, modulated_allpass::kMaxDepthSamples);
+        center_ = std::clamp(centerDelaySamples,
+                             modulated_allpass::kMinCenterDelaySamples,
+                             static_cast<float>(Size - modulated_allpass::kHermiteGuard) - depth_ - 1.0f);
+        phaseInc_ = rateHz / sampleRate;
+        reset();
+        phase_ = fmodf(initialPhase, 1.0f);
+    }
+
+    [[nodiscard]] float process(float x) {
+        // 1. Compute modulated delay time
+        const float lfo = sinf(kTwoPi * phase_);
+        const float D_frac = center_ + depth_ * lfo;
+
+        // 2. Clamp delay to safe Hermite read range
+        const float D_safe = std::clamp(D_frac,
+                                        1.0f,
+                                        static_cast<float>(Size - modulated_allpass::kHermiteGuard));
+
+        // 3. Read from buffer (Hermite fractional interpolation) — BEFORE write
+        const float delayed = buf_.readHermite(D_safe);
+
+        // 4. Schroeder allpass signal flow
+        const float w = x + g_ * delayed;
+        const float y = -g_ * w + delayed;
+
+        // 5. Write to buffer — AFTER read
+        buf_.write(w);
+
+        // 6. Advance LFO phase
+        phase_ += phaseInc_;
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+
+        return y;
+    }
+
+    void setRate(float rateHz, float sampleRate) {
+        phaseInc_ = rateHz / sampleRate;
+    }
+
+    void setDepth(float depthSamples) {
+        depth_ = std::clamp(depthSamples, 0.0f, modulated_allpass::kMaxDepthSamples);
+        depth_ = std::min(depth_,
+                          static_cast<float>(Size - modulated_allpass::kHermiteGuard) - center_ - 1.0f);
+    }
+
+    void setCenterDelay(float centerDelaySamples) {
+        center_ = std::clamp(centerDelaySamples,
+                             modulated_allpass::kMinCenterDelaySamples,
+                             static_cast<float>(Size - modulated_allpass::kHermiteGuard) - depth_ - 1.0f);
+    }
+
+    void reset() {
+        buf_.reset();
+        phase_ = 0.0f;
+    }
+
+private:
+    CircularBuffer<float, Size> buf_;
+    float g_ = 0.6f;
+    float center_ = 0.0f;
+    float depth_ = 0.0f;
+    float phaseInc_ = 0.0f;
+    float phase_ = 0.0f;
+};
