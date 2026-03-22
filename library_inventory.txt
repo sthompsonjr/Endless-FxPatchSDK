@@ -1,0 +1,120 @@
+ENDLESS FX PATCH SDK - LIBRARY INVENTORY
+=========================================
+
+EFFECT FILES (effects/)
+-----------------------
+
+PatchImpl_BigMuff.cpp
+  wdf/WdfBigMuffCircuit.h
+  dsp/ParameterSmoother.h
+
+PatchImpl_Bitcrush.cpp
+  (no local primitive includes)
+
+PatchImpl_DOD250.cpp
+  wdf/DOD250Circuit.h
+  dsp/ParameterSmoother.h
+  dsp/Saturation.h
+
+PatchImpl_OpticalComp.cpp
+  wdf/WdfOpticalCircuits.h
+
+PatchImpl_Rangemaster.cpp
+  wdf/WdfPnpCircuits.h
+  dsp/ParameterSmoother.h
+
+PatchImpl_Rat.cpp
+  wdf/WdfRatCircuit.h
+  dsp/Saturation.h
+
+PatchImpl_SoftFocus.cpp
+  dsp/SoftFocusCircuit.h
+
+PatchImpl_Tubescreamer.cpp
+  wdf/WdfTubescreamerCircuit.h
+  dsp/ParameterSmoother.h
+  dsp/Saturation.h
+
+PatchImpl_Wah.cpp
+  wdf/WdfWahCircuit.h
+  dsp/ParameterSmoother.h
+
+CIRCUIT FILES (wdf/)
+--------------------
+
+DOD250Circuit.h
+  WdfInvertingStage.h
+  dsp/ParameterSmoother.h
+  dsp/OnePoleFilter.h
+  dsp/Saturation.h
+
+WdfBigMuffCircuit.h
+  WdfPort.h
+  WdfOnePort.h
+  WdfAdaptors.h
+  WdfNonlinear.h
+  LambertW.h
+  dsp/OnePoleFilter.h
+
+WdfCircuits.h
+  WdfOnePort.h
+  WdfAdaptors.h
+  WdfNonlinear.h
+  dsp/ParameterSmoother.h
+
+WdfCompressorCircuits.h
+  WdfOta.h
+  dsp/EnvelopeFollower.h
+  dsp/ParameterSmoother.h
+
+WdfOpticalCircuits.h
+  WdfPhotoresistor.h
+  WdfOnePort.h
+  WdfOta.h
+  dsp/EnvelopeFollower.h
+  dsp/OnePoleFilter.h
+  dsp/ParameterSmoother.h
+  dsp/Saturation.h
+
+WdfPnpCircuits.h
+  WdfPnpBjt.h
+  WdfOnePort.h
+  WdfAdaptors.h
+  dsp/ParameterSmoother.h
+
+WdfRatCircuit.h
+  WdfNonlinear.h
+  WdfOpAmpLM308.h
+  dsp/ParameterSmoother.h
+  dsp/OnePoleFilter.h
+  dsp/Saturation.h
+
+WdfTubescreamerCircuit.h
+  WdfNonlinear.h
+  WdfOpAmpJRC4558.h
+  dsp/OnePoleFilter.h
+  dsp/ParameterSmoother.h
+  dsp/Saturation.h
+
+WdfWahCircuit.h
+  WdfPort.h
+  WdfOnePort.h
+  WdfAdaptors.h
+  WdfNonlinear.h
+  dsp/ParameterSmoother.h
+  dsp/EnvelopeFollower.h
+  dsp/Lfo.h
+  dsp/Saturation.h
+
+CIRCUIT FILES (dsp/)
+--------------------
+
+SoftFocusCircuit.h
+  CircularBuffer.h
+  AllpassDelay.h
+  ReverbPrimitives.h
+  GrainScheduler.h
+  GrainEnvelope.h
+  Lfo.h
+  ParameterSmoother.h
+
