@@ -14,3 +14,4 @@
 #include "BBDLine.h"
 #include "AnalogLfo.h"
 #include "UniVibeLfo.h"
+#include "SoftFocusCircuit.h"
