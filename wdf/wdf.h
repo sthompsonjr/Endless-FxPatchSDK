@@ -47,3 +47,4 @@
 #include "WdfWahCircuit.h"            // CryBaby wah, AutoWah
 #include "WdfCompressorCircuits.h"    // Dynacomp, OrangeSqz
 #include "WdfOpticalCircuits.h"       // PC-2A, OpticalLeveler, HybridOptOta
+#include "WdfBigMuffCircuit.h"        // EHX Big Muff Pi fuzz
