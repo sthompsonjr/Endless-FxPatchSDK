@@ -205,3 +205,81 @@ private:
     float phaseInc_ = 0.0f;
     float phase_ = 0.0f;
 };
+
+// ════════════════════════════════════════════════════════════════════════════
+// BitCrusher — Fixed-point quantizer for vintage digital reverb hardware
+// ════════════════════════════════════════════════════════════════════════════
+
+namespace bit_crusher {
+
+constexpr int kMinBits = 8;
+constexpr int kMaxBits = 24;
+constexpr int kDefaultBits = 12;
+
+} // namespace bit_crusher
+
+/// Fixed-point quantizer modeling vintage digital reverb hardware (e.g. Lexicon 224).
+///
+/// Quantizes input to B-bit resolution: q = round(x * 2^(B-1)) / 2^(B-1)
+/// Input is clamped to [-1.0f, 1.0f] before quantization.
+///
+/// Optional first-order noise shaping redistributes quantization noise toward
+/// high frequencies, producing a cleaner-sounding 12-bit artifact at the cost
+/// of a slightly raised noise floor above fs/4.
+///
+/// Designed for use in the FDN feedback path (one instance per delay line).
+/// At 12 bits, models the Lexicon 224 ADC/DAC round-trip in the feedback loop.
+class BitCrusher {
+public:
+    enum class Mode {
+        Round,       ///< Standard nearest-integer rounding. White quantization noise.
+        NoiseShape,  ///< First-order error diffusion. Noise shaped to high frequencies.
+    };
+
+    /// Initialize the quantizer.
+    ///
+    /// @param bits  Bit depth in [8, 24]. Clamped to this range.
+    ///              12 = Lexicon 224. 8 = lo-fi. 24 = transparent.
+    /// @param mode  Rounding mode. Default: Round (standard quantization).
+    void init(int bits, Mode mode = Mode::Round) noexcept {
+        const int clamped = std::clamp(bits, bit_crusher::kMinBits, bit_crusher::kMaxBits);
+        levels_ = static_cast<float>(1 << (clamped - 1));
+        invLevels_ = 1.0f / levels_;
+        mode_ = mode;
+        errorAcc_ = 0.0f;
+    }
+
+    /// Process one sample through the quantizer.
+    ///
+    /// @param  x  Input sample. Clamped to [-1.0f, 1.0f] internally.
+    /// @return    Quantized output sample.
+    [[nodiscard]] float process(float x) noexcept {
+        if (mode_ == Mode::Round) {
+            const float clamped = std::clamp(x, -1.0f, 1.0f);
+            return roundf(clamped * levels_) * invLevels_;
+        } else {
+            const float clamped = std::clamp(x - errorAcc_, -1.0f, 1.0f);
+            const float q = roundf(clamped * levels_) * invLevels_;
+            errorAcc_ = q - clamped;
+            return q;
+        }
+    }
+
+    /// Change bit depth without resetting the error accumulator.
+    void setBits(int bits) noexcept {
+        const int clamped = std::clamp(bits, bit_crusher::kMinBits, bit_crusher::kMaxBits);
+        levels_ = static_cast<float>(1 << (clamped - 1));
+        invLevels_ = 1.0f / levels_;
+    }
+
+    /// Reset the error accumulator to zero. Does not change bit depth or mode.
+    void reset() noexcept {
+        errorAcc_ = 0.0f;
+    }
+
+private:
+    float levels_    = 2048.0f;
+    float invLevels_ = 1.0f / 2048.0f;
+    float errorAcc_  = 0.0f;
+    Mode  mode_      = Mode::Round;
+};
