@@ -51,6 +51,17 @@ namespace bigmuff {
         constexpr float hFE = 416.0f;
     }
 
+    // 2N5088 (NYC Reissue) — high-hFE silicon NPN
+    // ⚠ Is approximated from 2N3904 family; 2N5088 datasheet range: 5-10e-15
+    // Defining characteristic: hFE 300-900 (typ 600), ideality factor ~1.0
+    // NYC Big Muff uses 2N5088 in all three gain stages; C_in 150nF (vs 100nF
+    // on Ram's Head) adds bass — not modelled here as C_in is a hardcoded constant.
+    namespace npn2n5088 {
+        constexpr float Is  = 6.7e-15f;
+        constexpr float Vt  = 1.0f * 25.85e-3f;   // ideality factor ~1.0
+        constexpr float hFE = 600.0f;              // high hFE — more compression/bass
+    }
+
     // 1N914 silicon diodes (inter-stage clipping)
     namespace diode_1n914 {
         constexpr float Is = 2.52e-9f;
@@ -93,7 +104,7 @@ namespace bigmuff {
         constexpr float f_q1q2_hz = 1.0f / (6.283185f * q2::R_th * q2::C_couple); // ≈ 33 Hz
     }
 
-    enum class Variant { RamsHead, CivilWar, Triangle };
+    enum class Variant { RamsHead, CivilWar, Triangle, NYC };
 
 } // namespace bigmuff
 
@@ -411,6 +422,11 @@ private:
                 break;
             case Variant::CivilWar:
                 curIs_ = npn2n3904::Is; curVt_ = npn2n3904::Vt; curHFE_ = npn2n3904::hFE;
+                break;
+            case Variant::NYC:
+                // 2N5088: high hFE → more compression, slightly more bass-heavy character
+                // Limitation: C_in=150nF (vs 100nF for Ram's Head) not modelled here
+                curIs_ = npn2n5088::Is; curVt_ = npn2n5088::Vt; curHFE_ = npn2n5088::hFE;
                 break;
         }
         initBjts();

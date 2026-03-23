@@ -186,6 +186,12 @@ public:
     void setDryMute(bool mute) noexcept { dryMuted_ = mute; }
     void setFreeze(bool frozen) noexcept { frozen_ = frozen; }
 
+    /// Gate the grain schedulers entirely.
+    /// When disabled, GrainScheduler::trigger() and ::process() are not called,
+    /// saving ~600 cycles/sample. The recording buffer continues to fill so that
+    /// grains play from recent audio immediately when voices are re-enabled.
+    void setVoicesEnabled(bool enabled) noexcept { voicesEnabled_ = enabled; }
+
     void process(float inL, float inR,
                  float& outL, float& outR) noexcept {
         const float input = (inL + inR) * 0.5f;
@@ -217,21 +223,25 @@ public:
                 hopCounter_ = 0;
             }
 
-            // Trigger grains at hop intervals
+            // Trigger grains at hop intervals — gated by voicesEnabled_
             hopCounter_++;
             if (hopCounter_ >= soft_focus::kGrainHopSamples) {
                 hopCounter_ = 0;
-                triggerGrains(dUp, dDown);
+                if (voicesEnabled_) {
+                    triggerGrains(dUp, dDown);
+                }
             }
         }
 
-        // Grain pitch voices
+        // Grain pitch voices — gated by voicesEnabled_
         float grainL = 0.0f, grainR = 0.0f;
-        grainUp_.process(grainL, grainR);
-        float grainDownL = 0.0f, grainDownR = 0.0f;
-        grainDown_.process(grainDownL, grainDownR);
-        grainL += grainDownL;
-        grainR += grainDownR;
+        if (voicesEnabled_) {
+            grainUp_.process(grainL, grainR);
+            float grainDownL = 0.0f, grainDownR = 0.0f;
+            grainDown_.process(grainDownL, grainDownR);
+            grainL += grainDownL;
+            grainR += grainDownR;
+        }
 
         // Symphonic doubler layer
         sympBufUp_.write(input);
@@ -296,9 +306,10 @@ public:
     }
 
 private:
-    float sampleRate_ = 48000.0f;
-    bool  dryMuted_   = false;
-    bool  frozen_     = false;
+    float sampleRate_   = 48000.0f;
+    bool  dryMuted_     = false;
+    bool  frozen_       = false;
+    bool  voicesEnabled_ = true;  // grain gate — false skips trigger() + process()
 
     // Recording buffer (from working memory)
     float* recBuf_    = nullptr;
