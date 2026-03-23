@@ -8,3 +8,4 @@ _conflicts/
 .DS_Store
 Thumbs.db
 Makefile.orig
+tests/reverb_primitives_test

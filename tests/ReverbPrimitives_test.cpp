@@ -367,10 +367,216 @@ static void testModulatedAllpassDelay() {
     }
 }
 
+// ============================================================
+// BitCrusher tests
+// ============================================================
+static void testBitCrusher() {
+    std::printf("\n--- BitCrusher ---\n");
+
+    // Test 1: 12-bit quantization — known values
+    {
+        BitCrusher bc;
+        bc.init(12);
+
+        check(bc.process(0.0f) == 0.0f,
+              "BitCrusher 12-bit: 0.0 reproduced exactly");
+        check(bc.process(1.0f) == 1.0f,
+              "BitCrusher 12-bit: 1.0 reproduced exactly");
+        check(bc.process(0.5f) == 0.5f,
+              "BitCrusher 12-bit: 0.5 reproduced exactly");
+
+        // Δ/2 above a level: round(1.5) = 2 → 2/2048
+        const float inputAbove = (1.0f / 2048.0f) + (1.0f / 4096.0f);
+        const float expected   = 2.0f / 2048.0f;
+        check(approx(bc.process(inputAbove), expected, 1e-7f),
+              "BitCrusher 12-bit: round-half-up behavior");
+    }
+
+    // Test 2: SQNR matches theory — 12-bit
+    {
+        BitCrusher bc;
+        bc.init(12);
+        const float phaseInc = 1000.0f / 48000.0f;
+
+        constexpr int N = 48000;
+        float phase = 0.0f;
+        float sigPow = 0.0f, noisePow = 0.0f;
+
+        for (int i = 0; i < N; ++i) {
+            const float x = sinf(kTwoPi * phase);
+            const float q = bc.process(x);
+            sigPow   += x * x;
+            noisePow += (q - x) * (q - x);
+            phase += phaseInc;
+            if (phase >= 1.0f) phase -= 1.0f;
+        }
+
+        const float sqnr_dB = 10.0f * log10f(sigPow / (noisePow + 1e-30f));
+        const float theoretical = 6.02f * 12.0f + 1.76f;
+
+        std::printf("    12-bit SQNR: measured=%.1f dB, theoretical=%.1f dB\n",
+                    static_cast<double>(sqnr_dB), static_cast<double>(theoretical));
+        check(fabsf(sqnr_dB - theoretical) < 3.0f,
+              "BitCrusher 12-bit SQNR within 3dB of 74.0dB");
+    }
+
+    // Test 3: SQNR matches theory — 8-bit
+    {
+        BitCrusher bc;
+        bc.init(8);
+        const float phaseInc = 1000.0f / 48000.0f;
+
+        constexpr int N = 48000;
+        float phase = 0.0f;
+        float sigPow = 0.0f, noisePow = 0.0f;
+
+        for (int i = 0; i < N; ++i) {
+            const float x = sinf(kTwoPi * phase);
+            const float q = bc.process(x);
+            sigPow   += x * x;
+            noisePow += (q - x) * (q - x);
+            phase += phaseInc;
+            if (phase >= 1.0f) phase -= 1.0f;
+        }
+
+        const float sqnr_dB = 10.0f * log10f(sigPow / (noisePow + 1e-30f));
+        const float theoretical = 6.02f * 8.0f + 1.76f;
+
+        std::printf("    8-bit SQNR: measured=%.1f dB, theoretical=%.1f dB\n",
+                    static_cast<double>(sqnr_dB), static_cast<double>(theoretical));
+        check(fabsf(sqnr_dB - theoretical) < 3.0f,
+              "BitCrusher 8-bit SQNR within 3dB of 49.9dB");
+    }
+
+    // Test 4: Noise shaping shifts noise to high frequencies
+    {
+        constexpr int N = 48000;
+
+        BitCrusher bcRound, bcShaped;
+        bcRound.init(12, BitCrusher::Mode::Round);
+        bcShaped.init(12, BitCrusher::Mode::NoiseShape);
+
+        const float phaseInc = 1000.0f / 48000.0f;
+        float phase = 0.0f;
+
+        float errDiffRound = 0.0f, errDiffShaped = 0.0f;
+        float errAccRound  = 0.0f, errAccShaped  = 0.0f;
+        float prevErrR = 0.0f, prevErrS = 0.0f;
+
+        for (int i = 0; i < N; ++i) {
+            const float x  = sinf(kTwoPi * phase);
+            const float eR = bcRound.process(x) - x;
+            const float eS = bcShaped.process(x) - x;
+
+            errDiffRound  += (eR - prevErrR) * (eR - prevErrR);
+            errDiffShaped += (eS - prevErrS) * (eS - prevErrS);
+            errAccRound   += eR * eR;
+            errAccShaped  += eS * eS;
+            prevErrR = eR;
+            prevErrS = eS;
+
+            phase += phaseInc;
+            if (phase >= 1.0f) phase -= 1.0f;
+        }
+
+        const float ratio = errAccShaped / (errAccRound + 1e-30f);
+        std::printf("    noise shaping: diffRatio=%.2f, totalPowerRatio=%.2f\n",
+                    static_cast<double>(errDiffShaped / (errDiffRound + 1e-10f)),
+                    static_cast<double>(ratio));
+        check(errDiffShaped > errDiffRound,
+              "BitCrusher noise shaping increases HF noise content");
+        check(ratio > 0.5f && ratio < 2.5f,
+              "BitCrusher noise shaping total power within expected range");
+    }
+
+    // Test 5: Input clamping
+    {
+        BitCrusher bc;
+        bc.init(12);
+
+        check(bc.process(1.5f) == 1.0f,
+              "BitCrusher clamps input > 1.0 to 1.0");
+        check(bc.process(-1.5f) == -1.0f,
+              "BitCrusher clamps input < -1.0 to -1.0");
+        check(bc.process(100.0f) == 1.0f,
+              "BitCrusher clamps large positive input");
+        check(std::isfinite(bc.process(1e10f)),
+              "BitCrusher: extremely large input stays finite");
+
+        bc.init(12, BitCrusher::Mode::NoiseShape);
+        check(bc.process(2.0f) == 1.0f,
+              "BitCrusher (NoiseShape) clamps input > 1.0");
+        check(std::isfinite(bc.process(-2.0f)),
+              "BitCrusher (NoiseShape) -2.0 stays finite");
+    }
+
+    // Test 6: reset() clears error accumulator
+    {
+        BitCrusher bcR, bcS;
+        bcR.init(12, BitCrusher::Mode::Round);
+        bcS.init(12, BitCrusher::Mode::NoiseShape);
+
+        for (int i = 0; i < 100; ++i)
+            (void)bcS.process(0.3f);
+
+        bcS.reset();
+
+        const float testInput = 0.7f;
+        const float outR = bcR.process(testInput);
+        const float outS = bcS.process(testInput);
+
+        check(outR == outS,
+              "BitCrusher reset: NoiseShape first output matches Round");
+    }
+
+    // Test 7: setBits() changes step size
+    {
+        BitCrusher bc;
+        bc.init(12);
+
+        const float out12 = bc.process(0.51f);
+        // 12-bit: round(0.51 * 2048) = round(1044.48) = 1044 → 1044/2048
+        check(approx(out12, 1044.0f / 2048.0f, 1e-6f),
+              "BitCrusher 12-bit quantization of 0.51");
+
+        bc.setBits(8);
+        const float out8 = bc.process(0.51f);
+        // 8-bit: round(0.51 * 128) = round(65.28) = 65 → 65/128
+        check(approx(out8, 65.0f / 128.0f, 1e-6f),
+              "BitCrusher 8-bit quantization of 0.51 after setBits(8)");
+
+        std::printf("    setBits: 12-bit=%.9f, 8-bit=%.9f\n",
+                    static_cast<double>(out12), static_cast<double>(out8));
+    }
+
+    // Test 8: Performance benchmark (informational)
+    {
+        BitCrusher bc;
+        bc.init(12);
+
+        constexpr int ITERATIONS = 10000000;
+        float acc = 0.001f;
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < ITERATIONS; ++i) {
+            acc = bc.process(acc * 0.9999f + 0.0001f);
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        double ns = std::chrono::duration<double, std::nano>(t1 - t0).count();
+        double nsPerCall = ns / ITERATIONS;
+        (void)acc;
+        std::printf("  INFO: BitCrusher performance: %.2f ns/call (target < 41 ns @ 720 MHz)\n",
+                    nsPerCall);
+        check(true, "BitCrusher performance benchmark (informational)");
+    }
+}
+
 int main() {
     std::printf("=== ReverbPrimitives Test Suite ===\n");
     testHadamard8();
     testModulatedAllpassDelay();
+    testBitCrusher();
     std::printf("\n=== Results: %d / %d passed ===\n", passedTests, totalTests);
     return (passedTests == totalTests) ? 0 : 1;
 }
