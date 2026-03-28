@@ -21,7 +21,9 @@
 
 // ── Nonlinear elements (depend on WdfPort, LambertW, NewtonRaphson) ────────
 #include "WdfNonlinear.h"     // WdfIdealDiode, WdfAntiparallelDiodes, WdfNpnBjt,
-                               // WdfDiodeToGround
+                               // WdfDiodeToGround, diode_physics, diode_params
+#include "WdfDiodeFamily.h"              // WdfDiodeFamily (parametric single diode, Lambert W)
+#include "WdfAntiparallelDiodeFamily.h"  // WdfAntiparallelDiodeFamily (parametric pair, 1D NR)
 
 // ── Op-amps (depend on WdfPort; independent of each other) ─────────────────
 #include "WdfOpAmpLM741.h"

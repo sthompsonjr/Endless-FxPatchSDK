@@ -312,3 +312,99 @@ private:
     float RIs_ = 0.0f;
     float invVt_ = 1.0f / 0.02585f;
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Diode parameter namespaces — added by WdfDiodeFamily prompt
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Fundamental diode physics constants.
+namespace diode_physics {
+    /// Thermal voltage: Vt = k×T/q = (1.380649e-23 × 300) / 1.60218e-19 = 25.85 mV.
+    /// T = 300 K (27°C). Treat as constant (temperature variation not modeled).
+    static constexpr float Vt = 25.85e-3f;  // V, thermal voltage at 300 K
+} // namespace diode_physics
+
+/// Named diode parameter structs for use with WdfDiodeFamily and WdfAntiparallelDiodeFamily.
+/// Each struct has Is (saturation current, A) and n (ideality factor, dimensionless).
+/// Source: SPICE model fits to manufacturer datasheets unless noted.
+namespace diode_params {
+
+    // ── Silicon signal diodes ─────────────────────────────────────────────────
+    /// Fairchild 1N914 silicon signal diode.
+    struct In914 {
+        static constexpr float Is = 2.52e-9f;   // A
+        static constexpr float n  = 1.752f;
+    };
+    /// Electrically identical to 1N914.
+    struct In4148 {
+        static constexpr float Is = 2.52e-9f;   // A
+        static constexpr float n  = 1.752f;
+    };
+    /// Vishay 1N5817 Schottky rectifier.
+    struct In5817 {
+        static constexpr float Is = 0.95e-6f;   // A
+        static constexpr float n  = 1.03f;
+    };
+    /// ON Semi 1N4001 rectifier.
+    struct In4001 {
+        static constexpr float Is = 14e-15f;    // A
+        static constexpr float n  = 1.06f;
+    };
+    /// Approximation; verify against 1N916 datasheet before circuit use.
+    struct In916 {
+        static constexpr float Is = 2.5e-9f;    // A
+        static constexpr float n  = 1.75f;
+    };
+
+    // ── Germanium signal diodes ───────────────────────────────────────────────
+    /// GE/Mullard 1N34A germanium signal diode.
+    struct In34a {
+        static constexpr float Is = 200e-9f;    // A
+        static constexpr float n  = 1.3f;
+    };
+    struct In270 {
+        static constexpr float Is = 195e-9f;    // A
+        static constexpr float n  = 1.3f;
+    };
+    /// British germanium equivalent.
+    struct Oa91 {
+        static constexpr float Is = 180e-9f;    // A
+        static constexpr float n  = 1.3f;
+    };
+    /// Point-contact germanium (rare); verify before circuit use.
+    struct In60p {
+        static constexpr float Is = 150e-9f;    // A
+        static constexpr float n  = 1.3f;
+    };
+
+    // ── Schottky diodes ───────────────────────────────────────────────────────
+    /// Infineon BAT41 small-signal Schottky.
+    struct Bat41 {
+        static constexpr float Is = 5e-6f;      // A
+        static constexpr float n  = 1.05f;
+    };
+    /// Infineon BAT46 small-signal Schottky.
+    struct Bat46 {
+        static constexpr float Is = 3.5e-6f;    // A
+        static constexpr float n  = 1.05f;
+    };
+
+    // ── LEDs ──────────────────────────────────────────────────────────────────
+    // Recombination-dominated junction: high Is, high n, high Vfwd.
+    /// Typical red LED SPICE parameters. High Vfwd for headroom preservation (Turbo RAT).
+    struct RedLed {
+        static constexpr float Is = 1e-12f;     // A
+        static constexpr float n  = 1.8f;
+    };
+    /// Typical green LED SPICE parameters.
+    struct GreenLed {
+        static constexpr float Is = 0.5e-12f;   // A
+        static constexpr float n  = 1.8f;
+    };
+    /// Generic amber/yellow LED.
+    struct StandardLed {
+        static constexpr float Is = 0.8e-12f;   // A
+        static constexpr float n  = 1.8f;
+    };
+
+} // namespace diode_params
