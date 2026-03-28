@@ -32,6 +32,8 @@
 
 // ── Transistors (depend on WdfPort, NewtonRaphson) ─────────────────────────
 #include "WdfPnpBjt.h"
+#include "WdfNpnBjtFamily.h"   // WdfNpnBjtFamily (parametric NPN, Ebers-Moll + Early, 2D NR)
+#include "WdfPnpBjtFamily.h"   // WdfPnpBjtFamily (parametric PNP, Ebers-Moll + Early, 2D NR)
 
 // ── Voltage-controlled elements (depend on WdfPort, NewtonRaphson) ─────────
 #include "WdfOta.h"
