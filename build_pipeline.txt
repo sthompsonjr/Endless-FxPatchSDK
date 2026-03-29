@@ -1,0 +1,176 @@
+ENDLESS-FxPatchSDK — BUILD PIPELINE & FEATURE ROADMAP
+======================================================
+
+Last updated: 2026-03-28
+Branch: master
+
+---
+
+STATUS KEY
+----------
+[DONE]                    — Feature fully implemented, tested, integrated
+[READY]                   — Feature ready for implementation (prerequisites met)
+[PENDING INTEGRATION]     — Prompt generated; awaiting SDK integration and testing
+[BLOCKED]                 — Blocked on external dependency or decision
+[IN REVIEW]               — Pull request pending
+
+---
+
+TIER 1 — COMPLETED EFFECTS
+==========================
+
+Big Muff Pi                                        [DONE] 2026-03-15
+  Three NPN transistor stages (Q1 input boost, Q2/Q3 clipping).
+  Implemented in WdfBigMuffCircuit.h, three variants (RamsHead BC549C,
+  CivilWar 2N3904, Triangle BC549C). Anti-parallel diode clipping (1N914).
+  Inter-stage AC coupling with tone stack. PatchImpl_BigMuff.cpp complete.
+  Verified 2026-03-15.
+
+Soft Focus (SPX500)                                [DONE] 2026-03-18
+  Yamaha SPX500 shimmer/pitch reverb emulation. Includes FDN plate reverb,
+  granular pitch shifting (±15 cents), Symphonic doubler (parallel delay
+  taps at 250ms/380ms), and post-reverb parallel delay. 131K-sample grain
+  recording buffer, GrainScheduler with envelope control, Lfo modulation.
+  Implemented in dsp/SoftFocusCircuit.h, effects/PatchImpl_SoftFocus.cpp.
+  Verified 2026-03-18.
+
+---
+
+TIER 1 — IN PROGRESS / RECENTLY COMPLETED
+===========================================
+
+Shoegaze (BigMuff + SoftFocus chain)               [PENDING INTEGRATION]
+  Topology: WdfBigMuffCircuit → SoftFocusCircuit, hold footswitch reverses chain
+  Existing primitives: WdfBigMuffCircuit, SoftFocusCircuit, ParameterSmoother
+  New: PatchImpl_Shoegaze.cpp, optional NYC Big Muff variant (2N5088 params)
+  Notes: Grain gate optimization (bypass GrainScheduler when voiceMix < 0.01f)
+         and 32-sample control-rate smoothing reduce worst-case from ~11,250
+         to ~10,500 cycles (voices OFF) / ~11,100 cycles (voices ON).
+         NYC variant 2N5088 params need datasheet verification.
+  Prompt generated: 2026-03-22
+
+WDF Primitive Family Expansion                     [PENDING INTEGRATION]
+  Phase 1 — WdfDiodeFamily: parametric Lambert W solver, 13 diode presets
+    (1N914, 1N270, 1N34A, BAT41, BAT46, 1N4001, 1N5817, 1N60P, 1N916,
+     red LED, green LED, BS170 body diode, 1N916)
+  Phase 2 — WdfNpnBjtFamily: parametric 2D NR solver, 14 NPN presets
+    (AC127, 2N5088, MPSA12, MPSA13, MPSA18, MPSA42, BC108, BC109, BC337,
+     2N2222, BC183, BC547, BC549, BC549C)
+  Phase 3 — WdfPnpBjtFamily: 2 PNP presets (NKT275, OC81)
+  Phase 4 — WdfJfetFamily: analytical triode solver (J201, J310, 2N3819)
+  Phase 5 — WdfMosfetFamily: soft-clipper model (2N7000, BS170)
+  Notes: Backward-compatible with existing factory functions. New presets are
+         constexpr structs in typed namespaces (diode_params::, jfet_params::, etc.)
+         Files confirmed present: WdfDiodeFamily.h, WdfAntiparallelDiodeFamily.h,
+         WdfNpnBjtFamily.h, WdfPnpBjtFamily.h. All headers read and verified 2026-03-28.
+  Prompt generated: 2026-03-28
+
+WDF Test Audit and Repair                          [PENDING INTEGRATION]
+  Files targeted: wdf/WdfPnpBjt.h, wdf/WdfWahCircuit.h
+  Known failures: pnp_bjt_test.cpp (suspected Jacobian cross-partial error,
+                  possible field name mismatch hFE/Vaf vs Bf/Va),
+                  wah_test.cpp (suspected hardcoded port resistance, pot update
+                  not propagating through adaptor tree before scatter)
+  Prompt generated: 2026-03-25
+
+FDN Reverb Primitive Suite                         [PENDING INTEGRATION]
+  Four new primitives targeting Lexicon 224-style ambient reverb:
+  1. fdn::hadamard8() — 8x8 Hadamard mixing matrix
+  2. ModulatedAllpassDelay<Size> — Hermite-interpolated allpass with LFO mod
+  3. BitCrusher — error-diffusion noise shaping, 8-24 bit reduction
+  4. FdnReverb<N> — complete FDN reverb, prime-spaced delay lines
+  Notes: Delay line storage in external RAM (working buffer). DTCM for
+         coefficients and state. Prime lengths: 1019, 1399, 1877, 2269,
+         2677, 3137, 3547, 4073 samples.
+         CombFilter class with damping one-pole LP confirmed in ReverbPrimitives.h.
+         fdn::hadamard4() confirmed present.
+  Prompt generated: 2026-03-18
+
+---
+
+TIER 2 — STANDARD EFFECTS (EXISTING CIRCUITS, NO NEW MODELS)
+==============================================================
+
+DOD 250 Overdrive                                  [DONE]
+  Vintage boost/overdrive (3-stage common-emitter with diode clipping).
+  Implemented in WdfCircuits.h, DOD250Circuit.h. PatchImpl_DOD250.cpp verified.
+
+ProCo RAT (5 variants)                             [DONE]
+  High-gain distortion, 5 variants (RAT, Turbo Rat, Wildfire, Hot Rat, Clone).
+  WdfRatCircuit.h with WdfOpAmpLM308 (characteristically slow 0.3V/µs slew).
+  PatchImpl_Rat.cpp verified.
+
+Ibanez Tubescreamer (TS808, TS9, Klon)            [DONE]
+  Transparent overdrive, 3 variants. WdfTubescreamerCircuit.h with
+  WdfOpAmpJRC4558 (CEM3340-style shaping). PatchImpl_Tubescreamer.cpp verified.
+
+Rangemaster / FuzzFace / ToneBender / GeBoost     [DONE]
+  PNP transistor fuzzes (germanium + silicon). WdfPnpCircuits.h.
+  Implemented via WdfPnpBjt (2D Newton-Raphson). PatchImpl_Rangemaster.cpp verified.
+
+Wah-Wah (CryBaby, AutoWah)                        [DONE]
+  Resonant peak sweep using RLC resonator (sweep via pot or envelope).
+  WdfWahCircuit.h. Known test failures marked in WDF Test Audit.
+  PatchImpl_Wah.cpp verified.
+
+Optical Compressor (PC-2A, OpticalLeveler)        [DONE]
+  LDR + OTA VCA emulation. WdfOpticalCircuits.h with WdfPhotoresistor.
+  Soft-knee compression via analogue integrator. PatchImpl_OpticalComp.cpp verified.
+
+Bitcrush / Decimation                             [DONE]
+  Simple sample-rate reduction + bit-depth reduction.
+  PatchImpl_Bitcrush.cpp verified.
+
+---
+
+TIER 2 — NEW EFFECTS (PENDING)
+===============================
+
+Coloursound Overdriver                             [PENDING INTEGRATION]
+  Two-stage NPN gain circuit, silicon/germanium variants. Left footswitch
+  toggles silicon/germanium character. Known bias issue with R_b2 sizing.
+  Awaiting prompt execution and WdfOverdriverCircuit.h generation.
+  Prompt generated: 2026-03-14
+
+Flanger                                            [READY]
+  All prerequisite primitives in place: Lfo, ParameterSmoother, AllpassDelay.
+  Ready for PatchImpl_Flanger.cpp. No blocking dependencies.
+
+---
+
+NOTES
+-----
+
+1. WDF Primitive Families (Diode, BJT, etc.) are implemented as separate
+   header files with constexpr preset structs, not merged into the main
+   nonlinear headers. This allows circuits to choose specific transistor
+   models at compile time without code duplication.
+
+2. The three completed effects (Big Muff, Soft Focus, and their future chain
+   "Shoegaze") represent substantial WDF + DSP integration milestones.
+   Combined, they demonstrate:
+     - Multi-stage transistor amplifier synthesis
+     - Nonlinear harmonic complexity
+     - Granular+reverb processing (exotic effect chains)
+     - Parameter-driven circuit variants
+
+3. Test audit (2026-03-25) identified two regressions in WDF solvers.
+   Both are within scope of the WDF audit/repair prompt (2026-03-25).
+   Estimated fix complexity: Jacobian matrix correction (PnP BJT) and
+   adaptor tree scattering order (Wah). No architectural changes needed.
+
+4. FDN reverb primitives are already partially in place (CombFilter,
+   Hadamard4). The 2026-03-18 prompt added the extended Hadamard8,
+   ModulatedAllpass, BitCrusher, and full FdnReverb<N> template.
+   External RAM buffer management is critical (allocate at init time,
+   not during audio callback).
+
+5. All new implementations must respect hard constraints:
+     - No heap allocation (no new, malloc, std::vector)
+     - No exceptions
+     - No RTTI
+     - Single-precision float only (1.0f, not 1.0)
+     - C++20 standard
+     - noexcept on all audio-path methods
+     - Cycle budget: ~15,000 cycles/sample total
+

@@ -1,0 +1,448 @@
+ENDLESS-FxPatchSDK — LIBRARY INVENTORY
+========================================
+
+Last updated: 2026-03-28
+Branch: master
+
+---
+
+EFFECT FILES (effects/)
+-----------------------
+
+PatchImpl_BigMuff.cpp          [DONE] 2026-03-15
+  Implements: WdfBigMuffCircuit (three variants: RamsHead, CivilWar, Triangle)
+
+PatchImpl_SoftFocus.cpp        [DONE] 2026-03-18
+  Implements: SoftFocusCircuit (Yamaha SPX500 emulation with FDN reverb, grain processing)
+
+PatchImpl_DOD250.cpp           [DONE]
+  Implements: DOD250Circuit (vintage boost/overdrive)
+
+PatchImpl_Rat.cpp              [DONE]
+  Implements: WdfRatCircuit (5 variants with LM308 op-amp)
+
+PatchImpl_Tubescreamer.cpp     [DONE]
+  Implements: TS808Circuit, TS9Circuit, KlonClipStage (Ibanez Tubescreamer variants)
+
+PatchImpl_Rangemaster.cpp      [DONE]
+  Implements: RangemasterCircuit, FuzzFaceCircuit, ToneBenderMk1Circuit, GeBoostCircuit
+              (PNP germanium/silicon fuzzes)
+
+PatchImpl_Wah.cpp              [DONE]
+  Implements: CryBabyCircuit, AutoWahCircuit (resonant wah/envelope sweep)
+
+PatchImpl_OpticalComp.cpp      [DONE]
+  Implements: DynacompCircuit, PC2ACircuit, OpticalLevelerCircuit, HybridOptOtaCircuit
+              (LDR + OTA VCA optical compression)
+
+PatchImpl_Bitcrush.cpp         [DONE]
+  Simple sample-rate reduction and bit-depth quantization.
+
+---
+
+CIRCUIT FILES (dsp/)
+--------------------
+
+SoftFocusCircuit.h            [DONE] 2026-03-18
+  Class: SoftFocusCircuit
+  Purpose: Yamaha SPX500 shimmer reverb emulation
+  Key components:
+    - FDN plate reverb (4 prime-spaced comb filters with Hadamard mixing)
+    - Grain scheduler (polyphonic, up to 4 concurrent grains)
+    - Granular pitch shifting (±15 cents, ±12 cents LFO modulation)
+    - Symphonic doubler (parallel Hermite-interpolated delay taps)
+    - Post-reverb parallel delay taps (250ms, 380ms)
+    - LFO modulation (0.15–1.5 Hz)
+  References: CircularBuffer, AllpassDelay, ReverbPrimitives, GrainScheduler,
+              GrainEnvelope, Lfo, ParameterSmoother
+
+---
+
+WDF PRIMITIVE CLASSES (wdf/)
+-----------------------------
+
+WdfPort.h
+  WdfPort (struct) — atomic wave variable port
+    Members: Rp (port resistance), a (incident wave), b (reflected wave)
+    Methods: voltage(), current(), reset()
+    Purpose: Base unit of all WDF elements
+
+LambertW.h
+  Namespace: math
+  Functions:
+    lambertW0(x) — principal branch W0(x) via Halley iteration
+    lambertWn1(x) — negative branch W-1(x)
+  Purpose: Analytical solution for diode equations
+
+NewtonRaphson.h
+  Namespace: math
+  Struct: NRResult { value, converged, iterations }
+  Functions:
+    newtonRaphson(f, df, x0, tol, maxIter) — 1D Newton-Raphson
+    halley(f, df, ddf, x0, tol, maxIter) — 3rd-order Halley's method
+  Purpose: Nonlinear equation solving for transistors, diodes
+
+WdfOnePort.h
+  WdfResistor — pure absorption (b = 0)
+  WdfCapacitor — unit delay of incident wave (b = a[n-1])
+  WdfInductor — inverted delay (b = -a[n-1])
+  WdfIdealVoltageSource — ideal source (b = 2*Vs - a)
+  WdfResistiveVoltageSource — voltage source with series resistance
+  WdfResistiveCurrentSource — current source with parallel resistance
+  Purpose: Linear one-port WDF elements
+
+WdfAdaptors.h
+  WdfSeriesAdaptor2<ChildA, ChildB> — 2-port series junction
+  WdfParallelAdaptor2<ChildA, ChildB> — 2-port parallel junction
+  WdfSeriesAdaptor3<P1, P2> — 3-port series (one port is root)
+  WdfParallelAdaptor3<P1, P2> — 3-port parallel
+  Purpose: WDF junction elements with scattering relations
+
+WdfNonlinear.h
+  WdfIdealDiode — 1D Lambert W solver for single diode
+    Key methods: init(Is, Vt, Rp), reflect(), voltage(), current()
+    Cycle cost: ~400–600 cycles/sample
+  WdfAntiparallelDiodes — 1D Lambert W solver for antiparallel pair
+    Key methods: init(Is, Vt, Rp), reflect(), voltage(), current()
+    Cycle cost: ~400–600 cycles/sample
+  WdfDiodeToGround — asymmetric single-diode clipping
+    Key methods: init(Is, Vt, Rp), reflect(), voltage(), current()
+    Cycle cost: ~400–600 cycles/sample
+  WdfNpnBjt — 2D Newton-Raphson for Ebers-Moll NPN BJT
+    Key methods: init(sampleRate, params), reflect(vB, vC, vE), reset()
+    Cycle cost: ~800–2000 cycles/sample
+  Purpose: Nonlinear WDF elements (diodes, transistors)
+
+WdfDiodeFamily.h
+  WdfDiodeFamily — parametric single diode (Lambert W closed-form)
+    Key methods: init(is, ideality), reflect()
+    Purpose: Reusable diode element with any Is/n parameter
+    Cycle cost: ~400–600 cycles/sample
+
+WdfAntiparallelDiodeFamily.h
+  WdfAntiparallelDiodeFamily — parametric antiparallel pair (1D NR)
+    Key methods: init(is, ideality), reflect(), lastIterations()
+    Purpose: Reusable antiparallel diode element
+    Cycle cost: ~400–600 cycles/sample
+
+WdfNpnBjtFamily.h
+  WdfNpnBjtFamily — parametric NPN BJT (full Ebers-Moll, 2D NR)
+    Members: port_B, port_C, port_E (three WdfPorts)
+    Key methods: init(Is, Bf, Br, n, Va), reflect()
+    Purpose: Reusable NPN transistor element with parametric solver
+    Cycle cost: ~800–2000 cycles/sample
+    Note: Uses underscore-suffixed port names (port_B, port_C, port_E)
+          to distinguish from legacy WdfNpnBjt
+
+WdfPnpBjtFamily.h
+  WdfPnpBjtFamily — parametric PNP BJT (full Ebers-Moll, 2D NR)
+    Members: port_B, port_C, port_E (three WdfPorts)
+    Key methods: init(Is, Bf, Br, n, Va), reflect()
+    Purpose: Reusable PNP transistor element with parametric solver
+    Cycle cost: ~800–2000 cycles/sample
+    Known test failures: pnp_bjt_test.cpp (2026-03-25)
+    Note: Uses underscore-suffixed port names
+
+WdfOpAmpLM741.h
+  WdfOpAmpLM741 — general-purpose op-amp model
+    Specs: A0=100 (40dB), fp=100Hz, SR=0.5V/µs, Vrail=±13V, Vos=1mV
+    Key methods: init(sampleRate), setRailVoltage(v), process(vPlus, vMinus), reset()
+    Purpose: Nonlinear op-amp model for DOD250, inverting stages
+
+WdfOpAmpLM308.h
+  WdfOpAmpLM308 — slow slew-rate op-amp (RAT distortion)
+    Specs: A0=100, fp=100Hz, SR=0.3V/µs (characteristically slow),
+           Vrail=±7.5V, Vos=2mV
+    Key methods: init(sampleRate), setRailVoltage(v), setCompCapPF(pF),
+                 setAge(0–1), setCharacter(0–1), process(vPlus, vMinus), reset()
+    Purpose: Heart of ProCo RAT — the slow slew rate creates characteristic grit
+
+WdfOpAmpJRC4558.h
+  WdfOpAmpJRC4558 — Ibanez Tubescreamer op-amp
+    Specs: A0=50, fp=300Hz, SR≈0.32V/µs, Vrail=±13V, Vos=2mV
+    Key methods: init(sampleRate), setRailVoltage(v), setAge(0–1),
+                 setCharacter(0–1), setSlew(0–1), process(vPlus, vMinus), reset()
+    Purpose: TS808/TS9 Tubescreamer op-amp with aging/slew parameters
+
+WdfPnpBjt.h
+  WdfPnpBjt — legacy PNP BJT (Ebers-Moll, 2D Newton-Raphson)
+    Struct: Params { Is, Vt, hFE, Vaf }
+    Key methods: init(sampleRate, params), reflect(vB, vC, vE), reset(),
+                 lastIterationCount(), lastConverged()
+    Factory presets:
+      makeOC44() — Germanium Rangemaster (Is=200µA, Vt=28mV, hFE=70, Vaf=40V)
+      makeOC75() — Germanium Tone Bender (Is=100µA, Vt=28mV, hFE=100, Vaf=40V)
+      makeAC128() — Germanium Fuzz Face (Is=150µA, Vt=28mV, hFE=120, Vaf=50V)
+      make2N3906() — Silicon reference (Is=6.7pA, Vt=26mV, hFE=200, Vaf=100V)
+    Cycle cost: ~800–2000 cycles/sample
+
+WdfOta.h
+  WdfOta — Operational Transconductance Amplifier VCA
+    Key methods: init(Iabc_max, Iabc_min, sampleRate), setIabc(Iabc),
+                 process(input), getGain(), getIabc(), reset()
+    Namespace: ca3080_params (CA3080 OTA constants)
+    Purpose: Voltage-controlled amplifier for compressor circuits
+
+WdfPhotoresistor.h
+  WdfPhotoresistor — Light-dependent resistor (LDR)
+    Struct: Params { R_dark, R_bright, tau_fast, tau_slow, tau_release, w_fast_attack, sampleRate }
+    Namespace: ldr_params (NSL-32SR3 and Silonex SL5542 presets)
+    Key methods: init(params), setLightLevel(0–1), reflect(), reset(),
+                 getCurrentResistance(), getCurrentLightLevel(), isAttacking(), getInertia()
+    Purpose: Two-time-constant photocell model for optical compressors (LA-2A style)
+
+WdfInvertingStage.h
+  WdfInvertingStage — inverting op-amp with feedback diode clipping
+    Key methods: init(R1, Rf, C2, diodeIs, diodeVt, sampleRate), setFeedbackResistance(Rf),
+                 process(vIn), reset(), opamp()
+    Purpose: Inverting amplifier stage (RAT's diode clipping feedback loop)
+
+WdfCircuits.h
+  RCLowpassCircuit — passive RC lowpass filter
+    Key methods: init(R, C, sampleRate), setR(R), process(input), reset()
+  DiodeClipperCircuit — input resistor + antiparallel diodes
+    Key methods: init(R_input, type, sampleRate), setInputResistance(R), process(input)
+    Enum: DiodeType { Silicon, Germanium }
+  ToneStackCircuit — 3-band active tone EQ
+    Key methods: init(sampleRate), setBass(0–1), setMid(0–1), setTreble(0–1),
+                 process(input), reset()
+  BJTGainStageCircuit — common-emitter amplifier
+    Key methods: init(sampleRate, params), setGainReduction(0–1), process(input), reset()
+  Purpose: Foundational circuit building blocks
+
+DOD250Circuit.h
+  DOD250Circuit — DOD 250 vintage overdrive/boost
+    Key methods: init(sampleRate), setBoostAmount(0–1), process(input), reset()
+    Purpose: 3-stage common-emitter with diode clipping
+
+WdfRatCircuit.h
+  WdfRatCircuit — ProCo RAT (5 variants)
+    Variants: RAT, TurboRat, Wildfire, HotRat, Clone
+    Key methods: init(sampleRate, variant), setGain(0–1), setFilter(0–1),
+                 setVolume(0–1), process(input), reset()
+    Purpose: High-gain distortion with variable clipping/response
+
+WdfTubescreamerCircuit.h (note: WdfTubescreamerCircuit.h file contains three classes)
+  TS808Circuit — Ibanez TS808 Tubescreamer
+    Key methods: init(sampleRate), setDrive(0–1), setTone(0–1), setLevel(0–1),
+                 process(input), reset()
+  TS9Circuit — Ibanez TS9 Tubescreamer (TS808 with asymmetric clipping)
+    Key methods: init(sampleRate), setDrive(0–1), setTone(0–1), setLevel(0–1),
+                 process(input), reset()
+  KlonClipStage — Centaur-style asymmetric clipping
+    Key methods: init(sampleRate), process(input), reset()
+  Purpose: Transparent overdrives with tone shaping
+
+WdfPnpCircuits.h (note: contains four classes)
+  RangemasterCircuit — Rangemaster Treble Booster (germanium PNP)
+    Key methods: init(sampleRate), setGain(0–1), process(input), reset()
+  FuzzFaceCircuit — Jimi Hendrix Fuzz Face (germanium PNP)
+    Key methods: init(sampleRate), setFuzz(0–1), setGain(0–1),
+                 process(input), reset()
+  ToneBenderMk1Circuit — Tone Bender Mark I (germanium PNP)
+    Key methods: init(sampleRate), setGain(0–1), setTone(0–1),
+                 process(input), reset()
+  GeBoostCircuit — Germanium booster stage
+    Key methods: init(sampleRate), setBoost(0–1), process(input), reset()
+  Purpose: Classic germanium transistor fuzzes and boosters
+
+WdfWahCircuit.h (note: contains two classes)
+  CryBabyCircuit — CryBaby wah-wah (resonant peak sweep)
+    Key methods: init(sampleRate), setPosition(0–1), setResonance(0–1),
+                 setBaseFreq(hz), setQpeak(Q), process(input), reset()
+  AutoWahCircuit — Auto-wah envelope-follower variant
+    Key methods: init(sampleRate), setEnvSensitivity(0–1), setModRate(0–1),
+                 process(input), reset()
+  Known test failures: wah_test.cpp (2026-03-25)
+  Purpose: Resonant filters with frequency modulation
+
+WdfCompressorCircuits.h
+  DynacompCircuit — MXR Dynacomp optical compressor
+    Key methods: init(sampleRate), setCompression(0–1), setToneLength(0–1),
+                 process(input), reset()
+  Purpose: Optical compression using OTA VCA
+
+WdfOpticalCircuits.h (note: contains three classes)
+  PC2ACircuit — Teletronix LA-2A style compressor (optical)
+    Key methods: init(sampleRate), setGain(0–1), setCompression(0–1),
+                 setFreq(hz), process(input), reset()
+  OpticalLevelerCircuit — leveling amplifier variant
+    Key methods: init(sampleRate), setThreshold(0–1), setRatio(0–1),
+                 process(input), reset()
+  HybridOptOtaCircuit — hybrid optical/OTA compression
+    Key methods: init(sampleRate), setOtaGain(0–1), setLdrLight(0–1),
+                 process(input), reset()
+  Purpose: Optical compression and gain control
+
+WdfBigMuffCircuit.h
+  BigMuffCircuit (note: renamed from WdfBigMuffCircuit in implementation)
+    Three variants: RamsHead (BC549C), CivilWar (2N3904), Triangle (BC549C)
+    Key methods: init(sampleRate, variant), setVolume(0–1), setTone(0–1),
+                 setSustain(0–1), process(input), reset()
+    Purpose: EHX Big Muff Pi transistor-level model
+    Three NPN common-emitter stages (Q1 boost, Q2/Q3 clipping) with
+    anti-parallel diode soft clipping and tone stack.
+    Verified 2026-03-15.
+
+---
+
+DSP PRIMITIVE CLASSES (dsp/)
+-----------------------------
+
+Note: All DSP primitives are part of the foundational "front-end" before
+      WDF-based circuits. They provide modulation, filtering, and parameter
+      control for effects chains.
+
+InterpolationType (Interpolation.h)
+  Functions (namespace interp):
+    linear(a, b, t) — linear interpolation
+    hermite(xm1, x0, x1, x2, t) — 4-point cubic Hermite
+    cosine(a, b, t) — cosine interpolation
+  Purpose: Fractional delay sample interpolation
+
+Saturation functions (Saturation.h)
+  Namespace: sat
+  Functions:
+    softClip(x) — tanh-based soft clip
+    softClipCubic(x) — polynomial approximation
+    hardClip(x, thresh) — hard clip to threshold
+    fold(x) — wavefolding
+    drive(x, amount) — parameterized drive
+  Purpose: Nonlinear shaping for distortion/overdrive
+
+OnePoleFilter (OnePoleFilter.h)
+  Class: OnePoleFilter
+  Enum: Type { Lowpass, Highpass, DCBlock }
+  Key methods: init(sampleRate), setFrequency(hz), setType(type), process(x), reset()
+  Cycle cost: ~30–50 cycles/sample
+  Purpose: Single-pole IIR lowpass/highpass/DC blocking
+
+ParameterSmoother (ParameterSmoother.h)
+  Class: ParameterSmoother
+  Key methods: init(sampleRate, smoothMs), setTarget(value), process(),
+               getCurrentValue(), snapTo(value)
+  Cycle cost: ~15–25 cycles/sample
+  Purpose: Smooth parameter transitions over configurable time
+
+CircularBuffer (CircularBuffer.h)
+  Class: CircularBuffer<T, Size> (Size must be power-of-2)
+  Key methods: reset(), write(x), read(delaySamples), readLinear(delay),
+               readHermite(delay), size()
+  Cycle cost: ~80–120 cycles/sample (Hermite interpolation)
+  Purpose: Delay line storage (external RAM recommended for large buffers)
+
+AllpassDelay (AllpassDelay.h)
+  Class: AllpassDelay<Size>
+  Key methods: init(delaySamples, coefficient), process(x), reset()
+  Purpose: Schroeder allpass for reverb diffusion
+
+Lfo (Lfo.h)
+  Class: Lfo
+  Enum: Shape { Sine, Triangle, Saw, ReverseSaw, Square, SampleHold }
+  Key methods: init(sampleRate), setFrequency(hz), setShape(s), setPhaseOffset(p),
+               reset(), process(), processUnipolar()
+  Output: bipolar [-1, 1] or unipolar [0, 1]
+  Purpose: Basic LFO for modulation
+
+AnalogLfo (AnalogLfo.h)
+  Class: AnalogLfo
+  Enum: Shape { Sine, Triangle, Saw, ReverseSaw, Square }
+  Key methods: init(sampleRate), setFrequency(hz), setShape(s), setDriftAmount(d),
+               setDriftRate(r), setJitterAmount(j), reset(), process(),
+               processUnipolar(), getPhase(), getCurrentFrequency()
+  Purpose: CEM3340-style LFO with frequency drift and per-sample jitter
+
+UniVibeLfo (UniVibeLfo.h)
+  Class: UniVibeLfo
+  Struct: LdrState { filterState, sensitivityOffset, output }
+  Key methods: init(sampleRate), setRate(hz), setIntensity(i), reset(),
+               process(), getLdrOutput(stageIdx), getBulbBrightness()
+  Purpose: Uni-Vibe incandescent bulb + LDR photoresistor modeling (4 LDR stages)
+
+EnvelopeFollower (EnvelopeFollower.h)
+  Class: EnvelopeFollower
+  Enum: Mode { Peak, RMS }
+  Key methods: init(sampleRate), setAttackMs(ms), setReleaseMs(ms),
+               setMode(m), process(x), getLevel(), reset()
+  Purpose: Dynamic level detection (peak or RMS)
+
+ReverbPrimitives (ReverbPrimitives.h)
+  Class: CombFilter<Size>
+  Namespace: fdn
+  Function: hadamard4(a, b, c, d) — 4×4 Hadamard matrix mix (modifies in-place)
+  Key methods: init(feedback, damp), process(x), reset()
+  Purpose: FDN reverb building blocks (comb filters + mixing matrix)
+
+GrainEnvelope (GrainEnvelope.h)
+  Namespace: grain
+  Enum: EnvelopeShape { Hann, Tukey, Trapezoid }
+  Functions: hann(phase), tukey(phase, ratio), trapezoid(phase, attack, release),
+             gaussian(phase, sigma)
+  Purpose: Envelope shaping for granular synthesis
+
+GrainScheduler (GrainScheduler.h)
+  Class: GrainScheduler<MaxGrains>
+  Struct: GrainParams { position, pitch, durationMs, pan, amplitude, shape }
+  Key methods: init(sampleRate, buffer, bufferSize), trigger(params),
+               process(), activeGrainCount(), reset()
+  Purpose: Polyphonic grain synthesis scheduler (up to MaxGrains concurrent)
+
+BBDLine (BBDLine.h)
+  Class: BBDLine<Size>
+  Key methods: init(sampleRate), setDelaySamples(n), setDelayMs(ms),
+               setCompanderAmount(a), setClockNoiseLevel(n), process(x), reset()
+  Purpose: Bucket Brigade Device delay line emulation with compander distortion,
+           clock noise, and reconstruction lowpass
+
+---
+
+SUMMARY STATISTICS
+------------------
+
+As of 2026-03-28:
+
+Category       Count   Notes
+----------------------------------------------
+WDF primitives:  27    Elements, adaptors, solvers, op-amps, photoresistor
+WDF circuits:    20    Named circuits (RatCircuit, BigMuff, Wah, etc.)
+DSP primitives:  16    Filters, LFOs, grain scheduling, reverb blocks
+Effects:          9    PatchImpl_*.cpp files (one active per build)
+SDK:              5    Patch interface, ABI, C wrapper, entry point
+Tests:            9    Native build test harnesses
+
+Total headers:   ~55 files
+Total LOC:       ~12,280 lines
+Total classes:   ~73 (WDF elements, circuits, DSP + SDK)
+Total namespaces: ~7 (bigmuff, coupling, sat, interp, fdn, ldr_params, etc.)
+
+---
+
+NOTES
+-----
+
+1. All WDF elements (one-ports, adaptors, nonlinear devices) are noexcept
+   and use single-precision float (1.0f not 1.0). No heap allocation.
+
+2. Parametric families (WdfDiodeFamily, WdfNpnBjtFamily, WdfPnpBjtFamily)
+   are designed as reusable templates that accept Is/Bf/Br/n/Va parameters.
+   Preset constants are defined in separate namespace blocks (e.g., diode_params::).
+
+3. Legacy classes (WdfNpnBjt, WdfPnpBjt, WdfIdealDiode, WdfAntiparallelDiodes)
+   remain for backwards compatibility but should gradually migrate to parametric
+   family classes for new circuits.
+
+4. Op-amp models (LM741, LM308, JRC4558) are NOT WDF elements — they are
+   signal processing blocks that take differential input voltage and return
+   output voltage. They model slew rate, rail clamping, and frequency response.
+
+5. Two known test failures (2026-03-25):
+   - pnp_bjt_test.cpp: suspected Jacobian cross-partial error in WdfPnpBjt
+   - wah_test.cpp: suspected pot update not propagating through adaptor tree
+
+6. All effect implementations reference the Patch interface (Patch.h):
+   - init(float sampleRate, float* workingBuffer, int workingBufferSize)
+   - process(float** inputs, float** outputs, int numSamples)
+   - setParameter(int index, float value)  // knobs: 0,1,2; expression: 3
+   - buttonPressed(int index)              // 0=left footswitch
+   - getLedColor()                          // returns 0xRRGGBB
+

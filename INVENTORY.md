@@ -1,7 +1,7 @@
 # Endless-FxPatchSDK — Consolidated Branch Inventory
 
-> **Branch:** `claude/consolidate-sdk-structure-1uNAY`
-> **Date:** 2026-03-13
+> **Branch:** `master`
+> **Date:** 2026-03-28
 > **Commits:**
 > ```
 > fc7be0c feat: collect all DSP/WDF code from feature branches into canonical structure
@@ -61,6 +61,7 @@ Endless-FxPatchSDK/
 │   ├── ParameterSmoother.h
 │   ├── ReverbPrimitives.h
 │   ├── Saturation.h
+│   ├── SoftFocusCircuit.h             ← Yamaha SPX500 shimmer reverb (new 2026-03-18)
 │   └── UniVibeLfo.h
 │
 ├── wdf/                              ← WDF analog circuit modeling
@@ -75,7 +76,11 @@ Endless-FxPatchSDK/
 │   ├── WdfOnePort.h                  ← R, C, L, voltage/current sources
 │   ├── WdfAdaptors.h                 ← Series/parallel 2-port and 3-port
 │   ├── WdfNonlinear.h                ← Diodes + NPN BJT
+│   ├── WdfDiodeFamily.h               ← Parametric diode family (new 2026-03-28)
+│   ├── WdfAntiparallelDiodeFamily.h   ← Parametric antiparallel pair (new 2026-03-28)
+│   ├── WdfNpnBjtFamily.h              ← Parametric NPN BJT family (new 2026-03-28)
 │   ├── WdfPnpBjt.h                   ← PNP BJT transistor
+│   ├── WdfPnpBjtFamily.h              ← Parametric PNP BJT family (new 2026-03-28)
 │   ├── WdfOta.h                      ← Operational transconductance amp
 │   ├── WdfPhotoresistor.h            ← Light-dependent resistor
 │   │
@@ -88,6 +93,7 @@ Endless-FxPatchSDK/
 │   │  ── Circuits ──
 │   ├── WdfCircuits.h                  ← RCLowpass, DiodeClipper, ToneStack, BJTGainStage
 │   ├── DOD250Circuit.h                ← DOD 250 Overdrive
+│   ├── WdfBigMuffCircuit.h            ← EHX Big Muff Pi (3 variants, new 2026-03-15)
 │   ├── WdfRatCircuit.h                ← ProCo RAT (5 variants)
 │   ├── WdfTubescreamerCircuit.h       ← TS808, TS9, Klon
 │   ├── WdfPnpCircuits.h               ← Rangemaster, FuzzFace, ToneBender, GeBoost
@@ -96,11 +102,13 @@ Endless-FxPatchSDK/
 │   └── WdfOpticalCircuits.h           ← PC-2A, OpticalLeveler, HybridOptOta
 │
 ├── effects/                           ← One PatchImpl per effect
+│   ├── PatchImpl_BigMuff.cpp           ← EHX Big Muff Pi (new 2026-03-15)
 │   ├── PatchImpl_Bitcrush.cpp
 │   ├── PatchImpl_DOD250.cpp
 │   ├── PatchImpl_OpticalComp.cpp
 │   ├── PatchImpl_Rangemaster.cpp
 │   ├── PatchImpl_Rat.cpp
+│   ├── PatchImpl_SoftFocus.cpp         ← Yamaha SPX500 shimmer (new 2026-03-18)
 │   ├── PatchImpl_Tubescreamer.cpp
 │   └── PatchImpl_Wah.cpp
 │
