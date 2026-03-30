@@ -9,3 +9,5 @@ _conflicts/
 Thumbs.db
 Makefile.orig
 tests/reverb_primitives_test
+svf_test
+svf_test_O0
