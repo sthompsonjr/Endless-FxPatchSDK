@@ -16,3 +16,4 @@
 #include "UniVibeLfo.h"
 #include "SoftFocusCircuit.h"
 #include "StateVariableFilter.h"
+#include "BiquadFilter.h"
