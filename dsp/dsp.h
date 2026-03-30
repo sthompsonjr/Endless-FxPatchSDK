@@ -15,3 +15,4 @@
 #include "AnalogLfo.h"
 #include "UniVibeLfo.h"
 #include "SoftFocusCircuit.h"
+#include "StateVariableFilter.h"
