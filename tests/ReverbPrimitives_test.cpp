@@ -572,11 +572,237 @@ static void testBitCrusher() {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FdnReverb<8> Tests
+// ════════════════════════════════════════════════════════════════════════════
+
+// Working buffer for FdnReverb<8> delay lines: 29,696 floats + headroom.
+static float gTestWorkingBuffer[32768];
+
+static bool nearlyEqual(float a, float b, float eps) {
+    return fabsf(a - b) < eps;
+}
+
+static void test_fdnreverb8_t60_decay()
+{
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, gTestWorkingBuffer, 32768);
+    fdn.setT60(1.0f);
+    fdn.setMix(1.0f);
+
+    constexpr int SR = 48000;
+    float outL, outR;
+
+    // Inject impulse; measure early energy (first 48 samples = 1ms)
+    fdn.process(1.0f, outL, outR);
+    float earlyEnergy = outL * outL + outR * outR;
+    for (int i = 1; i < 48; ++i) {
+        fdn.process(0.0f, outL, outR);
+        earlyEnergy += outL * outL + outR * outR;
+    }
+
+    // Run to 1 second minus the already-processed samples
+    for (int i = 48; i < SR - 48; ++i)
+        fdn.process(0.0f, outL, outR);
+
+    // Measure late energy (last 48 samples)
+    float lateEnergy = 0.0f;
+    for (int i = 0; i < 48; ++i) {
+        fdn.process(0.0f, outL, outR);
+        lateEnergy += outL * outL + outR * outR;
+    }
+
+    // Ratio must be < 3.16e-6 (-55dB energy tolerance, T60=1s target is -60dB)
+    const float ratio = lateEnergy / (earlyEnergy + 1e-30f);
+    assert(ratio < 3.16e-6f &&
+           "FdnReverb<8>: T60=1s decay ratio exceeds -55dB after 1 second");
+    printf("  PASS: test_fdnreverb8_t60_decay  (energy ratio=%.2e, target < 3.16e-6)\n", (double)ratio);
+    check(true, "FdnReverb<8> T60=1s energy decays >= 55dB in 1 second");
+}
+
+static void test_fdnreverb8_stability_sustained_input()
+{
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, gTestWorkingBuffer, 32768);
+    fdn.setT60(5.0f);
+    fdn.setMix(1.0f);
+
+    const float phaseInc = 440.0f / 48000.0f;
+    float phase = 0.0f;
+    float outL, outR;
+    bool ok = true;
+
+    for (int i = 0; i < 48000 * 10; ++i) {
+        const float in = sinf(kTwoPi * phase);
+        fdn.process(in, outL, outR);
+        if (!std::isfinite(outL) || !std::isfinite(outR) ||
+            fabsf(outL) >= 10.0f || fabsf(outR) >= 10.0f) {
+            ok = false;
+            break;
+        }
+        phase += phaseInc;
+        if (phase >= 1.0f) phase -= 1.0f;
+    }
+    check(ok, "FdnReverb<8> stability: 10s sine, no runaway or NaN (T60=5s)");
+}
+
+static void test_fdnreverb8_dry_passthrough()
+{
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, gTestWorkingBuffer, 32768);
+    fdn.setMix(0.0f);
+
+    float outL, outR;
+    // Allow smoother to converge: 20ms time constant needs ~1200 samples for <0.1% residual
+    for (int i = 0; i < 1200; ++i)
+        fdn.process(0.0f, outL, outR);
+
+    bool ok = true;
+    for (int i = 0; i < 100; ++i) {
+        fdn.process(0.5f, outL, outR);
+        if (!nearlyEqual(outL, 0.5f, 0.01f) || !nearlyEqual(outR, 0.5f, 0.01f)) {
+            ok = false;
+            break;
+        }
+    }
+    check(ok, "FdnReverb<8> dry passthrough: output = input at mix=0");
+}
+
+static void test_fdnreverb8_stereo_decorrelation()
+{
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, gTestWorkingBuffer, 32768);
+    fdn.setT60(3.0f);
+    fdn.setMix(1.0f);
+
+    float outL, outR;
+    fdn.process(1.0f, outL, outR);  // impulse
+
+    constexpr int MEAS = 4800;
+    float bufL[MEAS], bufR[MEAS];
+    for (int i = 0; i < MEAS; ++i)
+        fdn.process(0.0f, bufL[i], bufR[i]);
+
+    // Pearson correlation coefficient
+    float sumL = 0.0f, sumR = 0.0f, sumLL = 0.0f, sumRR = 0.0f, sumLR = 0.0f;
+    for (int i = 0; i < MEAS; ++i) {
+        sumL  += bufL[i];
+        sumR  += bufR[i];
+        sumLL += bufL[i] * bufL[i];
+        sumRR += bufR[i] * bufR[i];
+        sumLR += bufL[i] * bufR[i];
+    }
+    const float meanL = sumL / MEAS, meanR = sumR / MEAS;
+    const float cov   = sumLR / MEAS - meanL * meanR;
+    const float stdL  = sqrtf(sumLL / MEAS - meanL * meanL + 1e-30f);
+    const float stdR  = sqrtf(sumRR / MEAS - meanR * meanR + 1e-30f);
+    const float r     = fabsf(cov / (stdL * stdR));
+
+    std::printf("  INFO: stereo correlation r=%.3f (target < 0.9)\n", (double)r);
+    check(r < 0.9f, "FdnReverb<8> stereo decorrelation: L/R correlation < 0.9");
+}
+
+static void test_fdnreverb8_reset_clears_state()
+{
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, gTestWorkingBuffer, 32768);
+    fdn.setT60(10.0f);
+    fdn.setMix(1.0f);
+
+    float outL, outR;
+    // Build up reverb tail
+    for (int i = 0; i < 24000; ++i)
+        fdn.process(sinf(kTwoPi * (float)i * 440.0f / 48000.0f), outL, outR);
+
+    fdn.reset();
+
+    bool ok = true;
+    for (int i = 0; i < 200; ++i) {
+        fdn.process(0.0f, outL, outR);
+        if (!nearlyEqual(outL, 0.0f, 1e-5f) || !nearlyEqual(outR, 0.0f, 1e-5f)) {
+            ok = false;
+            break;
+        }
+    }
+    check(ok, "FdnReverb<8> reset: output is silent after reset()");
+}
+
+static void test_fdnreverb8_setT60_affects_decay()
+{
+    auto measureDecayEnergy = [](float t60, int measureAt) -> float {
+        static float localBuf[32768];
+        FdnReverb<8> fdn;
+        fdn.init(48000.0f, localBuf, 32768);
+        fdn.setT60(t60);
+        fdn.setMix(1.0f);
+
+        float outL, outR;
+        fdn.process(1.0f, outL, outR);  // impulse
+
+        float energy = 0.0f;
+        for (int i = 1; i < measureAt; ++i) {
+            fdn.process(0.0f, outL, outR);
+            if (i >= measureAt - 48)
+                energy += outL * outL + outR * outR;
+        }
+        return energy;
+    };
+
+    const float energyShort = measureDecayEnergy(0.5f, 24000);
+    const float energyLong  = measureDecayEnergy(5.0f, 24000);
+
+    std::printf("  INFO: T60 decay: short=%.2e, long=%.2e\n",
+                (double)energyShort, (double)energyLong);
+    check(energyShort < energyLong,
+          "FdnReverb<8> setT60: shorter T60 produces faster decay");
+}
+
+static void test_fdnreverb8_performance()
+{
+    static float perfBuf[32768];
+    FdnReverb<8> fdn;
+    fdn.init(48000.0f, perfBuf, 32768);
+    fdn.setT60(2.0f);
+
+    constexpr int ITERATIONS = 100000;
+    float outL = 0.0f, outR = 0.0f;
+    float phase = 0.0f;
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < ITERATIONS; ++i) {
+        fdn.process(sinf(kTwoPi * phase), outL, outR);
+        phase += 440.0f / 48000.0f;
+        if (phase >= 1.0f) phase -= 1.0f;
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    double ns = std::chrono::duration<double, std::nano>(t1 - t0).count();
+    double ns_per_call = ns / ITERATIONS;
+    (void)outL; (void)outR;
+
+    std::printf("  INFO: FdnReverb<8> performance: %.1f ns/call (outL=%.4f)\n",
+                ns_per_call, (double)outL);
+    check(true, "FdnReverb<8> performance benchmark (informational)");
+}
+
+static void testFdnReverb8() {
+    std::printf("\n--- FdnReverb<8> ---\n");
+    test_fdnreverb8_t60_decay();
+    test_fdnreverb8_stability_sustained_input();
+    test_fdnreverb8_dry_passthrough();
+    test_fdnreverb8_stereo_decorrelation();
+    test_fdnreverb8_reset_clears_state();
+    test_fdnreverb8_setT60_affects_decay();
+    test_fdnreverb8_performance();
+    printf("  All FdnReverb<8> tests complete.\n");
+}
+
 int main() {
     std::printf("=== ReverbPrimitives Test Suite ===\n");
     testHadamard8();
     testModulatedAllpassDelay();
     testBitCrusher();
+    testFdnReverb8();
     std::printf("\n=== Results: %d / %d passed ===\n", passedTests, totalTests);
     return (passedTests == totalTests) ? 0 : 1;
 }
