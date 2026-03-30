@@ -17,3 +17,4 @@
 #include "SoftFocusCircuit.h"
 #include "StateVariableFilter.h"
 #include "BiquadFilter.h"
+#include "HaasStereoWidener.h"
