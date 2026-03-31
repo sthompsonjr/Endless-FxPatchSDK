@@ -65,6 +65,7 @@ run_test "big_muff"
 run_test "soft_focus"
 run_test "multitap"
 run_test "pitch"
+run_test "sinc"
 
 echo ""
 echo "======================================"
