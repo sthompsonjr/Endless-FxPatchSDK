@@ -63,6 +63,7 @@ run_test "lm308_rat"
 run_test "ReverbPrimitives"
 run_test "big_muff"
 run_test "soft_focus"
+run_test "multitap"
 
 echo ""
 echo "======================================"

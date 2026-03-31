@@ -18,3 +18,4 @@
 #include "StateVariableFilter.h"
 #include "BiquadFilter.h"
 #include "HaasStereoWidener.h"
+#include "MultiTapDelay.h"
