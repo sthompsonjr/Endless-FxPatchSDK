@@ -542,6 +542,182 @@ static void test_performance() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Group 6: NYC Variant (2N5088) Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void test_nyc_variant_instantiation() {
+    std::printf("\n--- Group 6: NYC Variant Instantiation ---\n");
+
+    BigMuffCircuit circuit;
+    circuit.init(48000.0f);
+    circuit.setVariant(bigmuff::Variant::NYC);
+    circuit.setSustain(0.5f);
+    circuit.setTone(0.5f);
+    circuit.reset();
+    // Must not crash — if we get here, it passes
+    check(true, "nyc_variant_instantiation_no_crash");
+}
+
+static void test_nyc_variant_dc_blocking() {
+    std::printf("\n--- Group 6: NYC Variant DC Blocking ---\n");
+    // DC input must produce near-zero DC output (AC-coupled circuit).
+    // All inter-stage coupling caps and the output DC block filter remove DC
+    // by design. After sufficient settling, output converges toward 0.
+    //
+    // Settling budget: the output DC block filter has a 10 Hz corner (τ≈764
+    // samples). The input HP filter corner is 17 Hz (τ≈449 samples). Combined
+    // 5000-sample run (≈6.5 time constants of the DC block) reduces the DC
+    // transient to <0.001V before output scaling.
+
+    BigMuffCircuit circuit;
+    circuit.init(48000.0f);
+    circuit.setVariant(bigmuff::Variant::NYC);
+    circuit.setSustain(0.5f);
+    circuit.setTone(0.5f);
+    circuit.reset();
+
+    // Process 5000 samples of DC input = 0.5f (DC bias)
+    float lastOut = 0.0f;
+    for (int i = 0; i < 5000; ++i)
+        lastOut = circuit.process(0.5f);
+
+    std::snprintf(gDetailBuf, sizeof(gDetailBuf),
+        "|lastOut|=%.5f (must be <0.05)", FD(fabsf(lastOut)));
+    check(fabsf(lastOut) < 0.05f, "nyc_variant_dc_blocked_by_coupling_caps", gDetailBuf);
+}
+
+static void test_nyc_variant_sine_produces_output() {
+    std::printf("\n--- Group 6: NYC Variant Sine Output ---\n");
+    // A 440 Hz sine at moderate gain should produce nonzero, bounded output.
+
+    BigMuffCircuit circuit;
+    circuit.init(48000.0f);
+    circuit.setVariant(bigmuff::Variant::NYC);
+    circuit.setSustain(0.7f);
+    circuit.setTone(0.5f);
+    circuit.reset();
+
+    float maxOut = 0.0f;
+    const float freq = 440.0f;
+    const float sr   = 48000.0f;
+    for (int i = 0; i < 2400; ++i) {
+        float x = 0.3f * sinf(2.0f * 3.14159265f * freq * static_cast<float>(i) / sr);
+        float y = circuit.process(x);
+        if (fabsf(y) > maxOut) maxOut = fabsf(y);
+    }
+
+    std::snprintf(gDetailBuf, sizeof(gDetailBuf), "peak=%.4f (must be >0.001)", FD(maxOut));
+    check(maxOut > 0.001f, "nyc_variant_sine_nonzero_output", gDetailBuf);
+
+    std::snprintf(gDetailBuf, sizeof(gDetailBuf), "peak=%.4f (must be <2.0)", FD(maxOut));
+    check(maxOut < 2.0f,   "nyc_variant_sine_bounded_output", gDetailBuf);
+
+    std::printf("  INFO  NYC 440Hz peak=%.4f\n", FD(maxOut));
+}
+
+static void test_nyc_variant_sustain_increases_gain() {
+    std::printf("\n--- Group 6: NYC Variant Sustain vs. Gain ---\n");
+    // Higher sustain → higher output RMS for sub-clipping input.
+    // Sustain pot controls loop gain; increasing it raises amplitude before clipping onset.
+    //
+    // Amplitude 0.002f is chosen to keep the signal sub-clipping at all stages
+    // for both sustain levels (0.2 and 0.8). At 0.05f, Q3 saturates for both
+    // sustain levels, making the comparison ambiguous.
+    //
+    // 5000-sample warmup lets the output DC block filter (10 Hz corner, τ≈764
+    // samples) fully settle so the RMS accumulation reflects signal amplitude
+    // rather than DC transient.
+
+    BigMuffCircuit circuit;
+    circuit.init(48000.0f);
+    circuit.setVariant(bigmuff::Variant::NYC);
+    circuit.setTone(0.5f);
+
+    auto measureRMS = [&](float sustain) -> float {
+        circuit.setSustain(sustain);
+        circuit.reset();
+        const float freq = 440.0f;
+        const float sr   = 48000.0f;
+        // Warmup: let dcBlock_ settle before measuring
+        for (int i = 0; i < 5000; ++i)
+            processWarmup(circuit,
+                0.002f * sinf(2.0f * 3.14159265f * freq * static_cast<float>(i) / sr));
+        // Accumulate RMS (continue sine phase from i=5000)
+        float sum = 0.0f;
+        for (int i = 0; i < 4800; ++i) {
+            float x = 0.002f * sinf(2.0f * 3.14159265f * freq *
+                                    static_cast<float>(i + 5000) / sr);
+            float y = circuit.process(x);
+            sum += y * y;
+        }
+        return sqrtf(sum / 4800.0f);
+    };
+
+    const float rmsLow  = measureRMS(0.2f);
+    const float rmsHigh = measureRMS(0.8f);
+
+    std::printf("  INFO  NYC sustain RMS: low(0.2)=%.5f  high(0.8)=%.5f\n",
+                FD(rmsLow), FD(rmsHigh));
+    std::snprintf(gDetailBuf, sizeof(gDetailBuf),
+        "rmsLow=%.5f rmsHigh=%.5f (high must exceed low)", FD(rmsLow), FD(rmsHigh));
+    check(rmsHigh > rmsLow, "nyc_variant_higher_sustain_higher_rms", gDetailBuf);
+}
+
+static void test_nyc_variant_independent_of_other_variants() {
+    std::printf("\n--- Group 6: NYC Variant State Independence ---\n");
+    // Switching to NYC and back to RamsHead with reset must reproduce identical output.
+    // Verifies variant switch only changes BJT parameters; WDF state is properly reset.
+
+    BigMuffCircuit circuit;
+    circuit.init(48000.0f);
+    circuit.setSustain(0.5f);
+    circuit.setTone(0.5f);
+
+    const float freq = 440.0f;
+    const float sr   = 48000.0f;
+
+    // Capture 100 samples from RamsHead
+    circuit.setVariant(bigmuff::Variant::RamsHead);
+    circuit.reset();
+    static float ramsHead[100];
+    for (int i = 0; i < 100; ++i)
+        ramsHead[i] = circuit.process(0.1f * sinf(2.0f * 3.14159265f * freq * static_cast<float>(i) / sr));
+
+    // Switch to NYC, run 100 samples to dirty up state
+    circuit.setVariant(bigmuff::Variant::NYC);
+    circuit.reset();
+    for (int i = 0; i < 100; ++i)
+        processWarmup(circuit, 0.1f * sinf(2.0f * 3.14159265f * freq * static_cast<float>(i) / sr));
+
+    // Switch back to RamsHead, reset, capture again
+    circuit.setVariant(bigmuff::Variant::RamsHead);
+    circuit.reset();
+    static float ramsHead2[100];
+    for (int i = 0; i < 100; ++i)
+        ramsHead2[i] = circuit.process(0.1f * sinf(2.0f * 3.14159265f * freq * static_cast<float>(i) / sr));
+
+    // Both runs must be identical within float epsilon
+    bool allMatch = true;
+    int  firstMismatch = -1;
+    for (int i = 0; i < 100; ++i) {
+        if (fabsf(ramsHead[i] - ramsHead2[i]) >= 1e-6f) {
+            allMatch = false;
+            if (firstMismatch < 0) firstMismatch = i;
+        }
+    }
+
+    if (firstMismatch >= 0) {
+        std::snprintf(gDetailBuf, sizeof(gDetailBuf),
+            "first mismatch at sample %d: %.8f vs %.8f",
+            firstMismatch,
+            FD(ramsHead[firstMismatch]), FD(ramsHead2[firstMismatch]));
+    } else {
+        std::snprintf(gDetailBuf, sizeof(gDetailBuf), "all 100 samples match within 1e-6");
+    }
+    check(allMatch, "nyc_variant_independent_of_rams_head_state", gDetailBuf);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 int main() {
@@ -560,6 +736,13 @@ int main() {
     test_variant_switching_no_nan();
     test_civil_war_vs_rams_head();
     test_performance();
+
+    // NYC variant tests
+    test_nyc_variant_instantiation();
+    test_nyc_variant_dc_blocking();
+    test_nyc_variant_sine_produces_output();
+    test_nyc_variant_sustain_increases_gain();
+    test_nyc_variant_independent_of_other_variants();
 
     std::printf("\n======================================\n");
     std::printf(" Results: %d/%d passed", gPassed, gTotal);

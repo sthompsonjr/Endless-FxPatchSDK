@@ -51,6 +51,16 @@ namespace bigmuff {
         constexpr float hFE = 416.0f;
     }
 
+    // 2N5088 NPN — Fairchild/Motorola general-purpose NPN
+    // Used in EHX Big Muff Pi NYC (Version 9, mid-1990s onward)
+    // Parameters: Fairchild 2N5088 datasheet (DC characteristics, audio model)
+    // NOTE: verify Is and n against SPICE model if available
+    namespace npn2n5088 {
+        constexpr float Is  = 5.0e-15f;          // saturation current
+        constexpr float Vt  = 1.3f * 25.85e-3f;  // n=1.3 × thermal voltage at 20°C
+        constexpr float hFE = 400.0f;             // forward beta (hFE typ at Ic=2mA)
+    }
+
     // 1N914 silicon diodes (inter-stage clipping)
     namespace diode_1n914 {
         constexpr float Is = 2.52e-9f;
@@ -93,7 +103,7 @@ namespace bigmuff {
         constexpr float f_q1q2_hz = 1.0f / (6.283185f * q2::R_th * q2::C_couple); // ≈ 33 Hz
     }
 
-    enum class Variant { RamsHead, CivilWar, Triangle };
+    enum class Variant { RamsHead, CivilWar, Triangle, NYC };
 
 } // namespace bigmuff
 
@@ -233,6 +243,45 @@ public:
     void setVariant(bigmuff::Variant variant) noexcept {
         variant_ = variant;
         applyVariant();
+    }
+
+    /// Reset all filter states and re-warm port states to DC steady state.
+    /// Call after setVariant() to obtain a fully deterministic initial condition.
+    ///
+    /// OnePoleFilter::init() sets parameters but does NOT clear y1_/x1_ state.
+    /// Each filter must have reset() called explicitly after init() to guarantee
+    /// the same initial state regardless of prior variant or signal history.
+    void reset() noexcept {
+        inputHp_.init(sampleRate_);
+        inputHp_.setType(OnePoleFilter::Type::Highpass);
+        inputHp_.setFrequency(bigmuff::coupling::f_in_hz);
+        inputHp_.reset();   // clear y1_, x1_ — init() does not do this
+
+        q1q2Hp_.init(sampleRate_);
+        q1q2Hp_.setType(OnePoleFilter::Type::Highpass);
+        q1q2Hp_.setFrequency(bigmuff::coupling::f_q1q2_hz);
+        q1q2Hp_.reset();   // warmupPortStates() will re-warm from zero
+
+        q2q3Hp_.init(sampleRate_);
+        q2q3Hp_.setType(OnePoleFilter::Type::Highpass);
+        q2q3Hp_.setFrequency(bigmuff::coupling::f_q1q2_hz);
+        q2q3Hp_.reset();   // warmupPortStates() will re-warm from zero
+
+        toneLp_.init(sampleRate_);
+        toneLp_.setType(OnePoleFilter::Type::Lowpass);
+        toneLp_.setFrequency(bigmuff::tone::f_bass_hz);
+        toneLp_.reset();
+
+        toneHp_.init(sampleRate_);
+        toneHp_.setType(OnePoleFilter::Type::Highpass);
+        toneHp_.setFrequency(bigmuff::tone::f_treble_hz);
+        toneHp_.reset();
+
+        dcBlock_.init(sampleRate_);
+        dcBlock_.setType(OnePoleFilter::Type::DCBlock);
+        dcBlock_.reset();
+
+        warmupPortStates();
     }
 
     // Accessor helpers used by tests.
@@ -411,6 +460,11 @@ private:
                 break;
             case Variant::CivilWar:
                 curIs_ = npn2n3904::Is; curVt_ = npn2n3904::Vt; curHFE_ = npn2n3904::hFE;
+                break;
+            case Variant::NYC:
+                // 2N5088 NPN — EHX Big Muff Pi NYC
+                // Diode parameters unchanged: 1N914 antiparallel (same for all variants)
+                curIs_ = npn2n5088::Is; curVt_ = npn2n5088::Vt; curHFE_ = npn2n5088::hFE;
                 break;
         }
         initBjts();
