@@ -51,14 +51,15 @@ namespace bigmuff {
         constexpr float hFE = 416.0f;
     }
 
-    // 2N5088 NPN — Fairchild/Motorola general-purpose NPN
+    // 2N5088 NPN — Central Semiconductor Corp.
     // Used in EHX Big Muff Pi NYC (Version 9, mid-1990s onward)
-    // Parameters: Fairchild 2N5088 datasheet (DC characteristics, audio model)
-    // NOTE: verify Is and n against SPICE model if available
+    // Source: Central Semiconductor LTspice model, rev. A, 2010-08-18
+    //   IS=38.116E-15  BF=599.06  NF=1.0(default)  VAF=100
+    // Simplified to (Is, Vt=NF*kT/q, hFE=BF) for WdfNpnBjt solver.
     namespace npn2n5088 {
-        constexpr float Is  = 5.0e-15f;          // saturation current
-        constexpr float Vt  = 1.3f * 25.85e-3f;  // n=1.3 × thermal voltage at 20°C
-        constexpr float hFE = 400.0f;             // forward beta (hFE typ at Ic=2mA)
+        constexpr float Is  = 38.116e-15f;       // transport saturation current (IS)
+        constexpr float Vt  = 1.0f * 25.85e-3f;  // NF=1.0 (default) × thermal voltage
+        constexpr float hFE = 599.06f;            // forward beta (BF)
     }
 
     // 1N914 silicon diodes (inter-stage clipping)
