@@ -216,13 +216,15 @@ namespace npn_params {
         static constexpr float n  = 1.26f;
         static constexpr float Va = 100.0f;
     };
-    // Source: SPICE model. Low-noise; preamp applications.
+    // Source: Central Semiconductor LTspice model, rev. A, 2010-08-18
+    //   IS=38.116E-15  BF=599.06  BR=10.364  NF=1.0(default)  VAF=100
+    // NE=1.9979/ISE are Gummel-Poon non-ideal base terms — not used by this solver.
     struct N2N5088 {
-        static constexpr float Is = 0.4e-15f;
-        static constexpr float Bf = 2000.0f;
-        static constexpr float Br = 1.0f;
-        static constexpr float n  = 1.307f;
-        static constexpr float Va = 140.0f;
+        static constexpr float Is = 38.116e-15f;  // transport saturation current (IS)
+        static constexpr float Bf = 599.06f;      // forward beta (BF)
+        static constexpr float Br = 10.364f;      // reverse beta (BR)
+        static constexpr float n  = 1.0f;         // forward ideality factor (NF default)
+        static constexpr float Va = 100.0f;       // Early voltage (VAF)
     };
     // Source: SPICE model. Early small-signal NPN.
     struct N2N2222 {
