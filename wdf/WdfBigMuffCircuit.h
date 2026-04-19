@@ -218,7 +218,7 @@ public:
         const float Vc3 = runStage(q3_, q3Base_, q3Collector_, q3Emitter_);
 
         // ── Tone stack ───────────────────────────────────────────────────────
-        const float toned  = toneStack_.process(Vc3);
+        const float toned = toneBypass_ ? Vc3 : toneStack_.process(Vc3);
 
         // ── DC block + output scale ──────────────────────────────────────────
         const float out = dcBlock_.process(toned);
@@ -243,6 +243,10 @@ public:
         variant_ = variant;
         applyVariant();
         toneStack_.setVariant(mapToneVariant(variant));
+    }
+
+    void setToneBypass(bool bypass) noexcept {
+        toneBypass_ = bypass;
     }
 
     /// Reset all filter states and re-warm port states to DC steady state.
@@ -324,9 +328,10 @@ private:
     float sustainGain_  = 1.0f;
     bigmuff::Variant variant_ = bigmuff::Variant::RamsHead;
 
-    float curIs_  = bigmuff::bc549c::Is;
-    float curVt_  = bigmuff::bc549c::Vt;
-    float curHFE_ = bigmuff::bc549c::hFE;
+    float curIs_    = bigmuff::bc549c::Is;
+    float curVt_    = bigmuff::bc549c::Vt;
+    float curHFE_   = bigmuff::bc549c::hFE;
+    bool  toneBypass_ = false;
 
     // ── Inter-stage diode clipper ─────────────────────────────────────────────
     /// Anti-parallel 1N914 diode pair — analytical soft-clip using tanh.
