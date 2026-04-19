@@ -2,6 +2,7 @@
 
 #include "WdfInvertingStage.h"
 #include "WdfBigMuffToneStack.h"
+#include "OnePoleFilter.h"
 #include "BiquadFilter.h"
 #include <algorithm>
 
@@ -9,9 +10,9 @@
 // with anti-parallel 1N914 diode feedback and Big Muff tone stack.
 //
 // Signal flow:
-//   Input -> [Stage 1: WdfInvertingStage] -> [BiquadFilter HP, AC coupling] ->
+//   Input -> [Stage 1: WdfInvertingStage] -> [OnePoleFilter HP, AC coupling] ->
 //            [Stage 2: WdfInvertingStage] -> [WdfBigMuffToneStack | bypass] ->
-//            [volume scale] -> Output
+//            [BiquadFilter HP, output DC block] -> [volume scale] -> Output
 //
 // The sustain control scales the feedback resistance (R_fb) of both stages
 // simultaneously, from R_fb_min to R_fb_max. Both clipping stages share the
@@ -33,10 +34,9 @@ namespace opamp_big_muff_params {
     static constexpr float diode_n    = 1.752f;     // — ideality factor (documented)
     static constexpr float diode_Vt   = 0.02585f;   // V — thermal voltage at 20°C
 
-    // Inter-stage AC coupling (BiquadFilter highpass)
+    // Inter-stage AC coupling (OnePoleFilter highpass — 1st-order, per prompt spec)
     static constexpr float C_couple   = 100e-9f;    // F — physical coupling cap
     static constexpr float fc_couple  = 159.15f;    // Hz — equivalent corner
-    static constexpr float Q_couple   = 0.707f;     // Butterworth
 
     // Output DC block (models 100nF output coupling cap → ~16 Hz with 100k load).
     // Required because each LM741 stage contributes ~1 mV of input offset,
@@ -68,9 +68,8 @@ public:
                      sampleRate);
 
         acCoupling_.init(sampleRate);
-        acCoupling_.setParameters(BiquadFilter::Type::Highpass,
-                                  opamp_big_muff_params::fc_couple,
-                                  opamp_big_muff_params::Q_couple);
+        acCoupling_.setType(OnePoleFilter::Type::Highpass);
+        acCoupling_.setFrequency(opamp_big_muff_params::fc_couple);
 
         outputDcBlock_.init(sampleRate);
         outputDcBlock_.setParameters(BiquadFilter::Type::Highpass,
@@ -92,7 +91,10 @@ public:
         // Pre-warm: each LM741 has a 1 mV input offset that gets amplified
         // and slowly bleeds out through the AC-coupling and output DC-block
         // highpass filters. Run silent samples until the chain has settled.
-        for (int i = 0; i < 4096; ++i) {
+        // The 1st-order inter-stage HP (OnePoleFilter, fc=159 Hz) plus the
+        // 2nd-order output DC block (fc=20 Hz) need ~12k samples for the
+        // residual to drop below 1e-5 at 48 kHz.
+        for (int i = 0; i < 16384; ++i) {
             (void)processInternal(0.0f);
         }
     }
@@ -136,7 +138,7 @@ public:
 private:
     WdfInvertingStage   stage1_;
     WdfInvertingStage   stage2_;
-    BiquadFilter        acCoupling_;
+    OnePoleFilter       acCoupling_;
     BiquadFilter        outputDcBlock_;
     WdfBigMuffToneStack toneStack_;
 
