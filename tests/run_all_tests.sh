@@ -69,6 +69,28 @@ run_test "multitap"
 run_test "pitch"
 run_test "sinc"
 
+# power_puff requires PatchImpl compiled alongside the test (PatchImpl provides Patch::getInstance())
+printf "%-30s" "power_puff..."
+if g++ $CXX_FLAGS $INCLUDES -fno-exceptions -fno-rtti \
+       "$TESTS_DIR/power_puff_test.cpp" \
+       "$REPO_ROOT/effects/PatchImpl_PowerPuff.cpp" \
+       -o "$BUILD_DIR/test_power_puff" -lm 2>/tmp/test_build_err; then
+    if "$BUILD_DIR/test_power_puff" > /tmp/test_run_out 2>&1; then
+        echo "PASS"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL (runtime)"
+        cat /tmp/test_run_out
+        FAIL=$((FAIL + 1))
+        ERRORS+=("power_puff: runtime failure")
+    fi
+else
+    echo "FAIL (build)"
+    cat /tmp/test_build_err
+    FAIL=$((FAIL + 1))
+    ERRORS+=("power_puff: build failure")
+fi
+
 echo ""
 echo "======================================"
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
