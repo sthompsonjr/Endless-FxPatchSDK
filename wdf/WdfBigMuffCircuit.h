@@ -29,6 +29,7 @@
 #include "WdfNonlinear.h"
 #include "LambertW.h"
 #include "dsp/OnePoleFilter.h"
+#include "WdfBigMuffToneStack.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Named constants
@@ -120,7 +121,6 @@ public:
         sampleRate_ = sampleRate;
         variant_    = variant;
         sustain_    = 0.5f;
-        toneBlend_  = 0.5f;
         volume_     = 1.0f;
         sustainGain_ = 1.0f + sustain_ * 9.0f;
 
@@ -145,17 +145,17 @@ public:
         warmupPortStates();
 
         // Tone stack
-        toneLp_.init(sampleRate);
-        toneLp_.setType(OnePoleFilter::Type::Lowpass);
-        toneLp_.setFrequency(bigmuff::tone::f_bass_hz);
-
-        toneHp_.init(sampleRate);
-        toneHp_.setType(OnePoleFilter::Type::Highpass);
-        toneHp_.setFrequency(bigmuff::tone::f_treble_hz);
+        toneStack_.init(sampleRate, mapToneVariant(variant));
 
         // DC block on output
         dcBlock_.init(sampleRate);
         dcBlock_.setType(OnePoleFilter::Type::DCBlock);
+
+        // Pre-warm tone stack + DC blocker with Q3 DC collector voltage
+        const float Vc3_dc = q3Collector_.port.a;
+        for (int i = 0; i < 4000; ++i) {
+            (void)dcBlock_.process(toneStack_.process(Vc3_dc));
+        }
     }
 
     [[nodiscard]] float process(float in) noexcept {
@@ -218,9 +218,7 @@ public:
         const float Vc3 = runStage(q3_, q3Base_, q3Collector_, q3Emitter_);
 
         // ── Tone stack ───────────────────────────────────────────────────────
-        const float lpOut  = toneLp_.process(Vc3);
-        const float hpOut  = toneHp_.process(Vc3);
-        const float toned  = toneBlend_ * hpOut + (1.0f - toneBlend_) * lpOut;
+        const float toned  = toneStack_.process(Vc3);
 
         // ── DC block + output scale ──────────────────────────────────────────
         const float out = dcBlock_.process(toned);
@@ -234,7 +232,7 @@ public:
     }
 
     void setTone(float tone) noexcept {
-        toneBlend_ = std::clamp(tone, 0.0f, 1.0f);
+        toneStack_.setTone(std::clamp(tone, 0.0f, 1.0f));
     }
 
     void setVolume(float volume) noexcept {
@@ -244,6 +242,7 @@ public:
     void setVariant(bigmuff::Variant variant) noexcept {
         variant_ = variant;
         applyVariant();
+        toneStack_.setVariant(mapToneVariant(variant));
     }
 
     /// Reset all filter states and re-warm port states to DC steady state.
@@ -268,21 +267,20 @@ public:
         q2q3Hp_.setFrequency(bigmuff::coupling::f_q1q2_hz);
         q2q3Hp_.reset();   // warmupPortStates() will re-warm from zero
 
-        toneLp_.init(sampleRate_);
-        toneLp_.setType(OnePoleFilter::Type::Lowpass);
-        toneLp_.setFrequency(bigmuff::tone::f_bass_hz);
-        toneLp_.reset();
-
-        toneHp_.init(sampleRate_);
-        toneHp_.setType(OnePoleFilter::Type::Highpass);
-        toneHp_.setFrequency(bigmuff::tone::f_treble_hz);
-        toneHp_.reset();
+        toneStack_.init(sampleRate_, mapToneVariant(variant_));
+        toneStack_.reset();
 
         dcBlock_.init(sampleRate_);
         dcBlock_.setType(OnePoleFilter::Type::DCBlock);
         dcBlock_.reset();
 
         warmupPortStates();
+
+        // Pre-warm tone stack + DC blocker with Q3 DC collector voltage
+        const float Vc3_dc = q3Collector_.port.a;
+        for (int i = 0; i < 4000; ++i) {
+            (void)dcBlock_.process(toneStack_.process(Vc3_dc));
+        }
     }
 
     // Accessor helpers used by tests.
@@ -316,14 +314,12 @@ private:
     OnePoleFilter inputHp_;  // guitar signal → Q1 base
     OnePoleFilter q1q2Hp_;   // Q1 collector → Q2 base
     OnePoleFilter q2q3Hp_;   // Q2 collector → Q3 base
-    OnePoleFilter toneLp_;
-    OnePoleFilter toneHp_;
+    WdfBigMuffToneStack toneStack_;
     OnePoleFilter dcBlock_;
 
     // ── State ─────────────────────────────────────────────────────────────────
     float sampleRate_   = 48000.0f;
     float sustain_      = 0.5f;
-    float toneBlend_    = 0.5f;
     float volume_       = 1.0f;
     float sustainGain_  = 1.0f;
     bigmuff::Variant variant_ = bigmuff::Variant::RamsHead;
@@ -450,6 +446,15 @@ private:
                  q2Base_.port.Rp, q2Collector_.port.Rp, q2Emitter_.port.Rp);
         q3_.init(curIs_, curVt_, curHFE_,
                  q3Base_.port.Rp, q3Collector_.port.Rp, q3Emitter_.port.Rp);
+    }
+
+    static WdfBigMuffToneStack::Variant mapToneVariant(bigmuff::Variant v) noexcept {
+        switch (v) {
+            case bigmuff::Variant::Triangle: return WdfBigMuffToneStack::Variant::Triangle;
+            case bigmuff::Variant::CivilWar: return WdfBigMuffToneStack::Variant::CivilWar;
+            case bigmuff::Variant::NYC:      return WdfBigMuffToneStack::Variant::NYC;
+            default:                         return WdfBigMuffToneStack::Variant::RamsHead;
+        }
     }
 
     void applyVariant() noexcept {
