@@ -1,6 +1,6 @@
 BUILD PIPELINE — WHAT TO BUILD NEXT
 ======================================
-Last updated: 2026-04-02
+Last updated: 2026-04-20
 
 Prioritized implementation candidates. Maintained by the user.
 The project assistant consults this when recommending next builds.
@@ -20,19 +20,16 @@ Status key:
 TIER 1 — HIGH VALUE, PREREQUISITES MET
 -----------------------------------------
 
-Shoegaze (BigMuff + SoftFocus chain)               [PENDING INTEGRATION]
-  Topology: WdfBigMuffCircuit → SoftFocusCircuit, hold footswitch reverses chain
-  Existing primitives: WdfBigMuffCircuit, SoftFocusCircuit, ParameterSmoother
-  New: PatchImpl_Shoegaze.cpp, optional NYC Big Muff variant (2N5088 params)
-  Notes: Grain gate optimization (bypass GrainScheduler when voiceMix < 0.01f)
-         and 32-sample control-rate smoothing reduce worst-case from ~11,250
-         to ~10,500 cycles (voices OFF) / ~11,100 cycles (voices ON).
-         NYC variant 2N5088 params need datasheet verification.
-  Prompt generated: 2026-03-22
-
 Flanger                                            [READY]
   All prerequisite primitives in place: Lfo, ParameterSmoother, AllpassDelay.
   Ready for PatchImpl_Flanger.cpp. No blocking dependencies.
+
+Power Puff (EHX Big Muff Pi 5-variant)            [DONE] 2026-04-20
+  Five Big Muff variants: Triangle (BC549C), Rams Head (BC549C), Op-Amp (LM741),
+  Civil War (2N3904), NYC (2N5088). Each variant includes tone stack with distinct
+  component values (notch frequency varies 763–1199 Hz). Op-Amp variant uses
+  two-stage inverting amplifier configuration. Implemented in WdfOpAmpBigMuffCircuit,
+  PatchImpl_PowerPuff.cpp. Verified 2026-04-20.
 
 
 TIER 1 — COMPLETED EFFECTS
@@ -93,6 +90,16 @@ Bitcrush / Decimation                             [DONE]
 TIER 2 — NEW EFFECTS (PENDING)
 ===============================
 
+Shoegaze (BigMuff + SoftFocus chain)               [PENDING INTEGRATION]
+  Topology: WdfBigMuffCircuit → SoftFocusCircuit, hold footswitch reverses chain
+  Existing primitives: WdfBigMuffCircuit, SoftFocusCircuit, ParameterSmoother
+  New: PatchImpl_Shoegaze.cpp, optional NYC Big Muff variant (2N5088 params)
+  Notes: Grain gate optimization (bypass GrainScheduler when voiceMix < 0.01f)
+         and 32-sample control-rate smoothing reduce worst-case from ~11,250
+         to ~10,500 cycles (voices OFF) / ~11,100 cycles (voices ON).
+         NYC variant 2N5088 params need datasheet verification.
+  Prompt generated: 2026-03-22
+
 Coloursound Overdriver                             [PENDING INTEGRATION]
   Two-stage NPN gain circuit, silicon/germanium variants. Left footswitch
   toggles silicon/germanium character. Known bias issue with R_b2 sizing.
@@ -115,10 +122,10 @@ WDF Primitive Family Expansion                     [PENDING INTEGRATION]
   Phase 4 — WdfJfetFamily: analytical triode solver (J201, J310, 2N3819)
   Phase 5 — WdfMosfetFamily: soft-clipper model (2N7000, BS170)
   Notes: Backward-compatible with existing factory functions. New presets are
-         constexpr structs in typed namespaces (diode_params::, jfet_params::, etc.)
+         constexpr structs in typed namespaces (diode_params, jfet_params, etc.)
          Files confirmed present: WdfDiodeFamily.h, WdfAntiparallelDiodeFamily.h,
          WdfNpnBjtFamily.h, WdfPnpBjtFamily.h, WdfJfetFamily.h, WdfMosfetFamily.h.
-         All headers read and verified 2026-04-02.
+         All headers read and verified 2026-04-20.
   Prompt generated: 2026-03-28
 
 WDF Test Audit and Repair                          [PENDING INTEGRATION]
