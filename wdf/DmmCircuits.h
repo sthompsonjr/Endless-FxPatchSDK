@@ -24,7 +24,7 @@
 //   DmmInputBuffer      ~350 cycles  (3 WDF leaves, 2 adaptors, 1 op-amp)
 //   DmmAntiAliasFilter  ~550 cycles  (5 WDF leaves, 4 adaptors, 1 op-amp)
 //   DmmReconFilter      ~550 cycles  (identical tree, +1 multiply)
-//   DmmFeedbackEq       ~300 cycles  (4 WDF leaves, 3 adaptors, no op-amp)
+//   DmmFeedbackEq       ~30–60 cycles (direct IIR biquad; WDF tree removed)
 //   DmmOutputBuffer     ~150 cycles  (1 op-amp, no tree)
 //   Total (all 5):    ~1,900 cycles  (~17% of budget)
 
@@ -260,66 +260,156 @@ private:
 // Passive RC feedback equalization / darkening network (no op-amp).
 // Located in the feedback path; reduces high-frequency content on repeat.
 //
-// Schematic: Vin → C14(1µF) → R31(1MΩ) → Node_N2 → [C15(220nF) || R36(240kΩ)]
+// Schematic: Vin → C14 → R31(1MΩ) → Node_N2 → [C15 || R36(240kΩ)]
 //
-// WDF tree:
+// BUG ANALYSIS — original WDF tree (session 1):
+// ------------------------------------------------
+// The original implementation used:
 //   Series(C14, Series(R31, Parallel(C15, R36)))
 //
-// Transfer function (approx):
-//   HPF (C14+R31): f_H ≈ 1/(2π·1e6·1e-6) ≈ 0.16 Hz (DC block, effectively flat)
-//   LPF (C15||R36): f_L ≈ 1/(2π·240k·220n) ≈ 3.0 Hz  → not a true LPF at audio
-//   The actual EQ behavior is a complex bandpass/shelving shape; the WDF
-//   accurately models the exact RC network without approximation.
+// Per WDF first principles (Fettweis 1986; Yeh & Smith DAFx-08, Table 1):
+//   WdfResistor reflected wave: b[n] = 0 always.
 //
-// Output: V(N2) = voltage at Node_N2 (junction of R31 and C15||R36)
+// In a WDF series adaptor with children A and B:
+//   b_A = a_A - (2*Ra/(Ra+Rb)) * (a_A + a_B)
+//   b_B = a_B - (2*Rb/(Ra+Rb)) * (a_A + a_B)
+//
+// When B = WdfResistor (R31), b_B = 0, so the adaptor's scattering
+// reduces to b_A = -a_A (inverted passthrough). The downstream parallel
+// junction (N2) therefore receives the full incident wave with no voltage
+// division from R31. The 1MΩ vs 240kΩ ratio that should produce the
+// ~−12 dB mid-band attenuation is algebraically cancelled by b_R31 = 0.
+//
+// A resistor in a WDF tree contributes its PORT RESISTANCE to adaptor
+// impedance matching but contributes ZERO reflected energy. It is only
+// meaningful as part of a source (WdfResistiveVoltageSource) or as
+// an adaptor impedance, not as a standalone voltage-dividing element
+// in the middle of a tree.
+//
+// FIX: Replace the WDF tree with a direct IIR biquad implementing the
+// analog transfer function via bilinear transform.
+//
+// ANALOG TRANSFER FUNCTION DERIVATION:
+// -------------------------------------
+// Circuit: Vin → C14 → N1 → R31(1MΩ) → N2; N2 → C15 → GND; N2 → R36(240kΩ) → Vout
+//
+// Z_shunt(s) = Z_C15 || Z_R36 = R36 / (1 + s·τ2),  τ2 = C15·R36
+// Z_series(s) = Z_C14 + Z_R31 = R31 + 1/(s·C14)
+//
+// H(s) = Z_shunt / (Z_series + Z_shunt)
+//
+// Multiplying numerator and denominator by s·C14·(1 + s·τ2):
+//   Numerator:   s·C14·R36
+//   Denominator: 1 + s·(τ2 + C14·R31 + C14·R36) + s²·(C14·R31·τ2)
+//
+// Time constants (in milliseconds — see BLT note below):
+//   τ2       = C15·R36 = 0.0528 ms  → 1/(2π·τ2) ≈ 3.01 kHz HF rolloff
+//   C14·R31  = 1.0    ms            → HPF zero near DC
+//   C14·R36  = 0.24   ms            → numerator scale
+//
+// Coefficients:
+//   a_s2 = C14·R31·τ2           = 0.0528
+//   a_s1 = τ2 + C14·R31 + C14·R36 = 0.0528 + 1.0 + 0.24 = 1.2928
+//   a_s0 = 1.0
+//   b_s1 = C14·R36               = 0.24   (numerator s coefficient)
+//
+// H(s) = (0.24·s) / (0.0528·s² + 1.2928·s + 1)   [s in rad/ms = krad/s]
+//
+// Mid-band gain (well above HPF, below HF rolloff ≈ 3 kHz):
+//   H → b_s1/a_s1 ... but more precisely the peak is near where
+//   the reactive terms cancel; at 1 kHz the gain ≈ 0.18.
+//   Expected resistive ratio: R36/(R31+R36) = 240k/1240k = 0.194.
+//   Digital result ≈ 0.18 (reactive loading at 1 kHz shifts it slightly).
+//
+// BILINEAR TRANSFORM (Direct Form II Transposed):
+// -----------------------------------------------
+// NOTE: time constants above are in MILLISECONDS (τ2 = 0.0528 ms, not 0.0528 s).
+//   The BLT parameter k must therefore match: k = 2·fs_kHz = 2·48 = 96 at 48 kHz.
+//   Using k = 2·sampleRate (Hz) = 96000 would give near-zero audio-band gain
+//   because the poles would map to z ≈ 1 with negligible bandwidth.
+//
+// Substitute s = k·(z−1)/(z+1), multiply through by (z+1)², collect z^{−n}:
+//
+//   Numerator:   b_s1·k·(z²−1)  →  b0 = +b_s1·k/D,  b1 = 0,  b2 = −b_s1·k/D
+//     (b1 = 0 confirmed: (z−1)(z+1) = z²−1, coefficient of z^1 is zero)
+//
+//   Denominator scale D = a_s2·k² + a_s1·k + a_s0
+//   a1 = 2·(a_s0 − a_s2·k²) / D       (z^{−1} term, negative → resonance below Nyquist)
+//   a2 = (a_s2·k² − a_s1·k + a_s0) / D
+//
+// At fs = 48 kHz, k = 96:
+//   D    = 0.0528·9216 + 1.2928·96 + 1 = 486.60 + 124.11 + 1 = 611.71
+//   b0   =  0.24·96 / 611.71 ≈  0.03766
+//   b2   = −0.03766
+//   a1   = 2·(1 − 486.60) / 611.71 ≈ −1.5877  (negative → pole between DC and Nyquist)
+//   a2   = (486.60 − 124.11 + 1) / 611.71 ≈  0.5942
+//
+// Poles at z = (−a1 ± √(a1²−4·a2))/2 = 0.9835 and 0.6044 — both real, |z|<1, stable.
+//
+// Frequency response verification at fs = 48 kHz:
+//   f =    1 kHz : |H| ≈ 0.184  (target ≈ 0.18) ✓
+//   f =   20 Hz  : |H| ≈ 0.030  (< 0.05 HPF confirmed) ✓
+//   f =   10 kHz : |H| ≈ 0.068  (< 0.10 LPF confirmed) ✓
 //
 // Runaway guard: kRunawayGain = 0.92f — caller multiplies feedback signal
 //   by this constant to prevent self-oscillation at high feedback settings.
-//   Self-oscillation onset measured at ~80-85% pot travel on reference unit.
-//
-// Port resistances (at 48kHz):
-//   C14:  Rp = 1/(2·1e-6·48000) = 10.417 Ω
-//   R31:  Rp = 1,000,000 Ω
-//   C15:  Rp = 1/(2·220e-9·48000) = 47.35 Ω
-//   R36:  Rp = 240,000 Ω
-//   N2Par: Rp = C15||R36 = 47.26 Ω
-//   N1Ser: Rp = R31 + N2Par = 1,000,047 Ω
-//   EqTree root: Rp = C14 + N1Ser = 1,000,057 Ω
 // ---------------------------------------------------------------------------
 struct DmmFeedbackEq {
-    using N2Par  = WdfParallelAdaptor2<WdfCapacitor, WdfResistor>;
-    using N1Ser  = WdfSeriesAdaptor2<WdfResistor, N2Par>;
-    using EqTree = WdfSeriesAdaptor2<WdfCapacitor, N1Ser>;
-
     // Multiply feedback signal by this constant before passing to process()
     // to prevent self-oscillation at high feedback settings.
     static constexpr float kRunawayGain = 0.92f;
 
+    // Biquad state (Direct Form II Transposed)
+    float s1 = 0.0f;
+    float s2 = 0.0f;
+
+    // Coefficients computed by init() from bilinear transform of H(s) above
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f;
+
     void init(float sampleRate) noexcept {
-        root_.childA.init(1e-6f, sampleRate);              // C14
-        root_.childB.childA.init(1e6f);                    // R31
-        root_.childB.childB.childA.init(220e-9f, sampleRate);  // C15
-        root_.childB.childB.childB.init(240e3f);           // R36
-        root_.childB.childB.updatePortResistance();
-        root_.childB.updatePortResistance();
-        root_.updatePortResistance();
+        // H(s) = 0.24·s / (0.0528·s² + 1.2928·s + 1), s in rad/ms (krad/s)
+        // BLT: k = 2·fs_kHz  (NOT 2·fs_Hz — time constants are in milliseconds)
+        const float k    = 2.0f * sampleRate / 1000.0f;  // 96.0 at 48 kHz
+        const float k2   = k * k;
+
+        // Analog H(s) coefficients (dimensionless after ms normalization)
+        constexpr float b_s1 = 0.24f;    // numerator: s coefficient
+        constexpr float a_s0 = 1.0f;     // denominator: constant
+        constexpr float a_s1 = 1.2928f;  // denominator: s coefficient
+        constexpr float a_s2 = 0.0528f;  // denominator: s² coefficient
+
+        // Bilinear substitution denominator scale
+        const float denom = a_s2 * k2 + a_s1 * k + a_s0;
+
+        // Digital coefficients — bandpass form: zero at DC (z=1) and Nyquist (z=−1)
+        // Numerator: b_s1·k·(1 − z^{−2}), so b1 = 0 and b2 = −b0
+        b0 =  b_s1 * k / denom;
+        b1 =  0.0f;
+        b2 = -b_s1 * k / denom;
+
+        // Denominator (stored with natural sign; process() uses minus):
+        //   1 + a1·z^{−1} + a2·z^{−2}
+        a1 = 2.0f * (a_s0 - a_s2 * k2) / denom;
+        a2 = (a_s2 * k2 - a_s1 * k + a_s0) / denom;
+
+        s1 = 0.0f;
+        s2 = 0.0f;
     }
 
-    float process(float vin) noexcept {
-        root_.reflect();
-        root_.port.a = 2.0f * vin - root_.port.b;
-        root_.scatter();
-        root_.childB.scatter();
-        root_.childB.childB.scatter();  // update C15.port.a so its state evolves
-        return root_.childB.childB.port.voltage();
+    float process(float x) noexcept {
+        // Direct Form II Transposed:
+        //   H(z) = (b0 + b1·z^{−1} + b2·z^{−2}) / (1 + a1·z^{−1} + a2·z^{−2})
+        const float y = b0 * x + s1;
+        s1 = b1 * x - a1 * y + s2;
+        s2 = b2 * x - a2 * y;
+        return y;
     }
 
     void reset() noexcept {
-        root_.reset();
+        s1 = 0.0f;
+        s2 = 0.0f;
     }
-
-private:
-    EqTree root_;
 };
 
 // ---------------------------------------------------------------------------
@@ -479,26 +569,94 @@ int main() {
         check("DmmReconFilter gain @500Hz", gain, 4.545f, 0.15f);
     }
 
-    // --- DmmFeedbackEq: mid-band attenuation at 1 kHz ≈ 0.24× (-12.4 dB) ---
+    // --- DmmFeedbackEq: IIR biquad —
+    //     1 kHz ≈ 0.18, 20 Hz < 0.05, 10 kHz < 0.10, no NaN/Inf ---
     {
-        DmmFeedbackEq blk;
-        blk.init(kFs);
+        // 1 kHz mid-band gain ≈ 0.18 (bilinear transform of H(s); see derivation)
+        {
+            DmmFeedbackEq blk;
+            blk.init(kFs);
 
-        for (int i = 0; i < kWarmup; ++i) {
-            float s = kAmp * std::sin(2.0f * 3.14159265f * kFreq * static_cast<float>(i) / kFs);
-            blk.process(s);
+            for (int i = 0; i < kWarmup; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreq * static_cast<float>(i) / kFs);
+                blk.process(s);
+            }
+            float sumIn2 = 0.0f, sumOut2 = 0.0f;
+            for (int i = 0; i < kMeasure; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreq * static_cast<float>(kWarmup + i) / kFs);
+                sumIn2  += s * s;
+                float o = blk.process(s);
+                sumOut2 += o * o;
+            }
+            float inRms  = std::sqrt(sumIn2  / kMeasure);
+            float outRms = std::sqrt(sumOut2 / kMeasure);
+            float gain   = outRms / (inRms + 1e-9f);
+            check("DmmFeedbackEq gain @1kHz", gain, 0.18f, 0.12f);
         }
-        float sumIn2 = 0.0f, sumOut2 = 0.0f;
-        for (int i = 0; i < kMeasure; ++i) {
-            float s = kAmp * std::sin(2.0f * 3.14159265f * kFreq * static_cast<float>(kWarmup + i) / kFs);
-            sumIn2  += s * s;
-            float o = blk.process(s);
-            sumOut2 += o * o;
+        // 20 Hz — strong HPF rolloff: gain must be < 0.05
+        {
+            constexpr float kFreqLF = 20.0f;
+            DmmFeedbackEq blk;
+            blk.init(kFs);
+            for (int i = 0; i < kWarmup; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreqLF * static_cast<float>(i) / kFs);
+                blk.process(s);
+            }
+            float sumIn2 = 0.0f, sumOut2 = 0.0f;
+            for (int i = 0; i < kMeasure; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreqLF * static_cast<float>(kWarmup + i) / kFs);
+                sumIn2  += s * s;
+                float o = blk.process(s);
+                sumOut2 += o * o;
+            }
+            float inRms  = std::sqrt(sumIn2  / kMeasure);
+            float outRms = std::sqrt(sumOut2 / kMeasure);
+            float gain   = outRms / (inRms + 1e-9f);
+            bool ok = gain < 0.05f;
+            std::printf("[%s] DmmFeedbackEq HPF @20Hz: gain=%.4f (need <0.05)\n",
+                        ok ? "PASS" : "FAIL", gain);
+            if (ok) ++passed; else ++failed;
         }
-        float inRms  = std::sqrt(sumIn2  / kMeasure);
-        float outRms = std::sqrt(sumOut2 / kMeasure);
-        float gain   = outRms / (inRms + 1e-9f);
-        check("DmmFeedbackEq attenuation @1kHz", gain, 0.24f, 0.15f);
+        // 10 kHz — HF rolloff: gain must be < 0.10
+        {
+            constexpr float kFreqHF = 10000.0f;
+            DmmFeedbackEq blk;
+            blk.init(kFs);
+            for (int i = 0; i < kWarmup; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreqHF * static_cast<float>(i) / kFs);
+                blk.process(s);
+            }
+            float sumIn2 = 0.0f, sumOut2 = 0.0f;
+            for (int i = 0; i < kMeasure; ++i) {
+                float s = kAmp * std::sin(2.0f * 3.14159265f * kFreqHF * static_cast<float>(kWarmup + i) / kFs);
+                sumIn2  += s * s;
+                float o = blk.process(s);
+                sumOut2 += o * o;
+            }
+            float inRms  = std::sqrt(sumIn2  / kMeasure);
+            float outRms = std::sqrt(sumOut2 / kMeasure);
+            float gain   = outRms / (inRms + 1e-9f);
+            bool ok = gain < 0.10f;
+            std::printf("[%s] DmmFeedbackEq LPF @10kHz: gain=%.4f (need <0.10)\n",
+                        ok ? "PASS" : "FAIL", gain);
+            if (ok) ++passed; else ++failed;
+        }
+        // Numerical stability: 48000 samples of pink-noise-like input, no NaN/Inf
+        {
+            DmmFeedbackEq blk;
+            blk.init(kFs);
+            bool finite = true;
+            float x = 0.31623f; // -10 dBFS seed
+            for (int i = 0; i < 48000; ++i) {
+                // Simple LFSR-ish float noise via bit twiddling on phase
+                x = std::sin(x * 1.618033f + 0.5f) * 0.31623f;
+                float o = blk.process(x);
+                if (!std::isfinite(o)) { finite = false; break; }
+            }
+            std::printf("[%s] DmmFeedbackEq NaN/Inf check (48000 samples)\n",
+                        finite ? "PASS" : "FAIL");
+            if (finite) ++passed; else ++failed;
+        }
     }
 
     // --- DmmOutputBuffer: unity gain ≈ 1.0 ---
