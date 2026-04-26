@@ -6,13 +6,29 @@
  * Knob 2 (right):  Chorus/Vib   <0.5 = Chorus 3 Hz LFO, >=0.5 = Vibrato 6 Hz LFO
  * Left hold:       Runaway mode (toggles self-oscillation clamp)
  *
- * Session 3a: class skeleton, init(), setWorkingBuffer(), stub processAudio(),
- *             stub getStateLedColor(). No audio processing logic.
- * Session 3b: replace stub processAudio() with full per-sample signal chain.
+ * Session 3a:  class skeleton, init(), setWorkingBuffer(), stub processAudio(),
+ *              stub getStateLedColor(). No audio processing logic.
+ * Session 3aa: API audit — corrected processAudio stub, parameter defaults,
+ *              setParamValue storage pattern.
+ * Session 3b:  replace stub processAudio() with full per-sample signal chain.
  */
 
 #include "sdk/Patch.h"
 #include "wdf/DmmDelayCircuit.h"
+
+// SESSION 3aa VERIFIED API FACTS (do not remove — session 3b depends on these)
+// setWorkingBuffer : std::span<float, kWorkingBufferSize> — stores .data() + size
+// processAudio     : left + right dynamic spans; left.size() == right.size()
+// setParamValue    : indices 0/1/2 stored in paramDelay_/paramFeedback_/paramMode_
+//                    circuit setters NOT called here — called at control rate in processAudio
+// handleAction     : kLeftFootSwitchHold TOGGLES isRunaway_ (no hold-release event in API,
+//                    confirmed from PatchImpl_OpticalComp.cpp)
+//                    kLeftFootSwitchPress: no action
+// getStateLedColor : returns Color enum; ledPulseCounter_ incremented in processAudio (session 3b)
+// Control rate     : per-sample counter in processAudio (see PatchImpl_PowerPuff.cpp pattern);
+//                    session 3b decides divider value
+// Stereo handling  : DMM is mono; write wet sample to BOTH left[i] and right[i]
+//                    (confirmed from PatchImpl_PowerPuff.cpp: left[i]=y; right[i]=y)
 
 class PatchImpl : public Patch
 {
@@ -45,18 +61,18 @@ public:
     void processAudio(std::span<float> audioBufferLeft,
                       std::span<float> audioBufferRight) noexcept override
     {
-        // Session 3a stub: pass input to output unchanged.
+        // Session 3aa stub: pass-through left→right (mono circuit, no processing yet).
         // Session 3b replaces this with the full DMM signal chain.
-        (void)audioBufferLeft;
-        (void)audioBufferRight;
+        for (size_t i = 0; i < audioBufferLeft.size(); ++i)
+            audioBufferRight[i] = audioBufferLeft[i];
     }
 
     ParameterMetadata getParameterMetadata(int paramIdx) override
     {
         switch (paramIdx)
         {
-            case 0: return ParameterMetadata{0.0f, 1.0f, 0.5f}; // Delay time
-            case 1: return ParameterMetadata{0.0f, 1.0f, 0.3f}; // Feedback
+            case 0: return ParameterMetadata{0.0f, 1.0f, 0.3f};  // Delay time (~222ms)
+            case 1: return ParameterMetadata{0.0f, 1.0f, 0.25f}; // Feedback (modest repeats)
             case 2: return ParameterMetadata{0.0f, 1.0f, 0.0f}; // Chorus/Vib
             default: return ParameterMetadata{0.0f, 1.0f, 0.5f};
         }
@@ -64,20 +80,17 @@ public:
 
     void setParamValue(int paramIdx, float value) override
     {
+        // Store only — circuit setters are called at control rate inside processAudio()
+        // (session 3b). isVibrato_ is derived state kept in sync here for session 3b to read.
         switch (paramIdx)
         {
-            case 0:
-                circuit_.setDelayKnob(value);
-                break;
-            case 1:
-                circuit_.setFeedbackKnob(value);
-                break;
+            case 0: paramDelay_    = value; break;
+            case 1: paramFeedback_ = value; break;
             case 2:
+                paramMode_ = value;
                 isVibrato_ = (value >= 0.5f);
-                circuit_.setModeKnob(value);
                 break;
-            default:
-                break;
+            default: break;
         }
     }
 
@@ -112,6 +125,11 @@ private:
 
     float*  workingBuffer_     = nullptr;
     size_t  workingBufferSize_ = 0;
+
+    // Stored knob values — consumed by processAudio() at control rate (session 3b)
+    float   paramDelay_    = 0.3f;   // knob 0: delay time [0,1]
+    float   paramFeedback_ = 0.25f;  // knob 1: feedback [0,1]
+    float   paramMode_     = 0.0f;   // knob 2: chorus/vibrato [0,1]
 
     bool    isRunaway_       = false;
     bool    isVibrato_       = false;
