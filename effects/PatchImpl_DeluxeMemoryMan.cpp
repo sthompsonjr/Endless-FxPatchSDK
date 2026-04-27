@@ -130,16 +130,51 @@ public:
         return false;
     }
 
-    void handleAction(int actionIdx) override
+    // DMM LED STATE MACHINE
+    // =====================
+    // State variables: isRunaway_ (bool), isVibrato_ (bool),
+    //                  ledPulseState_ (bool), ledPulseCounter_ (int)
+    //
+    // Transitions:
+    //   kLeftFootSwitchHold received → isRunaway_ toggled
+    //                                   ledPulseCounter_ reset to 0
+    //                                   ledPulseState_ set to true (start bright)
+    //   paramMode_ >= 0.5f (set via setParamValue) → isVibrato_ = true
+    //   paramMode_ <  0.5f (set via setParamValue) → isVibrato_ = false
+    //   Every kRunawayLedHalfPeriodSamples (12,000) samples in processAudio():
+    //                                   ledPulseState_ toggled
+    //
+    // Output (getStateLedColor(), read-only):
+    //   isRunaway_ && ledPulseState_  → Color::kRed
+    //   isRunaway_ && !ledPulseState_ → Color::kDarkRed
+    //   !isRunaway_ && isVibrato_     → Color::kLightBlueColor
+    //   !isRunaway_ && !isVibrato_    → Color::kLightYellow  (default)
+    //
+    // No release event exists in endless::ActionId — runaway uses toggle.
+    // Ref: Patch.h endless::ActionId; EH-7850 design doc Section 7.
+    //
+    // NOTE: OpticalComp and PowerPuff cast actionIdx to int for dispatch
+    // (switch/if on int). DMM uses the spec-mandated pattern (cast to
+    // endless::ActionId first) for type-safe enum dispatch.
+    void handleAction(int actionIdx) noexcept override
     {
-        if (actionIdx == static_cast<int>(endless::ActionId::kLeftFootSwitchHold))
+        // No release event exists in the Patch.h API (endless::ActionId has no
+        // kLeftFootSwitchRelease). Runaway is therefore implemented as a toggle:
+        // each kLeftFootSwitchHold invocation flips the runaway state.
+        // Ref: EH-7850 design doc Section 7; Patch.h endless::ActionId enum.
+
+        const auto action = static_cast<endless::ActionId>(actionIdx);
+
+        if (action == endless::ActionId::kLeftFootSwitchHold)
         {
             isRunaway_ = !isRunaway_;
             circuit_.setRunawayMode(isRunaway_);
+            // Reset pulse counter on state change so LED responds immediately.
             ledPulseCounter_ = 0;
-            ledPulseState_   = false;
+            ledPulseState_   = true;  // start with kRed (bright) on activation
         }
-        // kLeftFootSwitchPress: no action for DMM
+        // kLeftFootSwitchPress: no action defined for DMM.
+        // Right footswitch bypass is handled by firmware, not patch code.
     }
 
     Color getStateLedColor() noexcept override
