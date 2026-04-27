@@ -10,7 +10,10 @@
  *              stub getStateLedColor(). No audio processing logic.
  * Session 3aa: API audit — corrected processAudio stub, parameter defaults,
  *              setParamValue storage pattern.
- * Session 3b:  replace stub processAudio() with full per-sample signal chain.
+ * Session 3b:  full per-sample signal chain, dry/wet mix, vibrato dry-mute,
+ *              control-rate dispatch (once per block), LED pulse counter.
+ *              getStateLedColor() three-state implementation (3c merged into 3b).
+ *              HANDOFF: skip session 3c → proceed to session 3d (test harness).
  */
 
 #include "sdk/Patch.h"
@@ -61,10 +64,36 @@ public:
     void processAudio(std::span<float> audioBufferLeft,
                       std::span<float> audioBufferRight) noexcept override
     {
-        // Session 3aa stub: pass-through left→right (mono circuit, no processing yet).
-        // Session 3b replaces this with the full DMM signal chain.
-        for (size_t i = 0; i < audioBufferLeft.size(); ++i)
-            audioBufferRight[i] = audioBufferLeft[i];
+        // Cycle budget: DmmDelayCircuit ~1,275–2,295 cycles/sample (measured headroom >8,700)
+        // Clock: 528 MHz, available: 11,000 cycles/sample at 48 kHz
+        // Control-rate overhead amortized: applied once per block (before sample loop)
+
+        // Apply parameters once per block (SoftFocus pattern: dispatch outside sample loop).
+        circuit_.setDelayKnob(paramDelay_);
+        circuit_.setFeedbackKnob(paramFeedback_);
+        circuit_.setModeKnob(paramMode_);
+        isVibrato_ = (paramMode_ >= 0.5f);
+
+        for (auto leftIt = audioBufferLeft.begin(), rightIt = audioBufferRight.begin();
+             leftIt != audioBufferLeft.end();
+             ++leftIt, ++rightIt)
+        {
+            const float dry = *leftIt;
+            const float wet = circuit_.process(dry);
+
+            // Vibrato mode: hard mute dry (EH-7850 hardware behavior).
+            // Chorus mode: 50/50 fixed ratio — not user-adjustable per original hardware.
+            const float out = isVibrato_ ? wet : (0.5f * dry + 0.5f * wet);
+
+            *leftIt  = out;
+            *rightIt = out;
+
+            // Runaway LED pulse: alternates kRed/kDarkRed every 250 ms (12,000 samples).
+            if (++ledPulseCounter_ >= kRunawayLedHalfPeriodSamples) {
+                ledPulseCounter_ = 0;
+                ledPulseState_   = !ledPulseState_;
+            }
+        }
     }
 
     ParameterMetadata getParameterMetadata(int paramIdx) override
@@ -113,10 +142,14 @@ public:
         // kLeftFootSwitchPress: no action for DMM
     }
 
-    Color getStateLedColor() override
+    Color getStateLedColor() noexcept override
     {
-        // Session 3a stub: warm amber for chorus mode (default).
-        // Session 3b: kLightYellow=chorus, kDimCobalt=vibrato, kRed pulsing=runaway.
+        if (isRunaway_) {
+            return ledPulseState_ ? Color::kRed : Color::kDarkRed;
+        }
+        if (isVibrato_) {
+            return Color::kLightBlueColor;
+        }
         return Color::kLightYellow;
     }
 
