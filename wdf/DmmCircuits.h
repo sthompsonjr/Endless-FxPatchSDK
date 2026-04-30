@@ -104,78 +104,55 @@ private:
 // ---------------------------------------------------------------------------
 // Block A3: DmmAntiAliasFilter
 //
-// IC3a RC4558 Sallen-Key LPF, fc ≈ 2.1 kHz, Q ≈ 0.5 (Butterworth-ish)
+// IC3a RC4558 Sallen-Key LPF, fc ≈ 2.1 kHz
 // Component values: R13=51kΩ, R14=16kΩ, C11=C12=2.7nF
 //
-// Sallen-Key topology (unity-gain):
-//   Vin → R13 → Node_A → [C11 (to op-amp Vout) || R14 → C12 → VREF]
-//   Op-amp: unity gain (V+ = C12 top = Node_B, Vout = V+)
+// SESSION 3d FIX — WDF SALLEN-KEY INSTABILITY:
+// -----------------------------------------------
+// The original WDF tree (Series(R13, Par(Series(C11,Vs), Series(R14,C12))),
+// with Vs injecting vOutPrev_ to break the delay-free op-amp loop, was
+// unconditionally unstable. Per-sample trace of C12.state_ with ANY nonzero
+// initial condition showed growth at ~1.4–2.5× per step regardless of input
+// amplitude, reaching float overflow at ~261 samples. Root cause: the
+// one-sample-delay WDF-Sallen-Key closed-loop recursion has an eigenvalue
+// outside the unit circle for these component values at 48 kHz.
 //
-// WDF tree:
-//   Series(R13, Parallel(Series(C11, Vs), Series(R14, C12)))
-//
-//   Where Vs (WdfIdealVoltageSource) is set to vOutPrev_ each sample to
-//   break the delay-free feedback loop through C11. This is the standard
-//   WDF technique for op-amp output feedback injection into a capacitor
-//   branch (Rp_Vs ≈ 1e-6 Ω, negligible effect on junction impedance).
-//
-// Port resistances (at 48kHz):
-//   C11:  Rp = 1/(2·2.7e-9·48000) = 3,858 Ω
-//   Vs:   Rp = 1e-6 Ω
-//   C11Br: Rp = 3,858 + 1e-6 ≈ 3,858 Ω
-//   R14:  Rp = 16,000 Ω
-//   C12:  Rp = 3,858 Ω
-//   NodeBBr: Rp = 16,000 + 3,858 = 19,858 Ω
-//   NodeAPar: Rp = 3858||19858 = 3,196 Ω
-//   R13:  Rp = 51,000 Ω
-//   SkTree root: Rp = 51,000 + 3,196 = 54,196 Ω
+// SAME FIX PATTERN as DmmFeedbackEq (session 2d Part A):
+// Replace WDF tree with Direct Form II Transposed biquad from BLT of:
+//   H(s) = ωc² / (s² + (ωc/Q)·s + ωc²)
+//   fc = 1/(2π·C·√(R13·R14)) ≈ 2063 Hz
+//   Q  = √(R13·R14)/(R13+R14) ≈ 0.4264
+//   BLT with k=2·fs → poles at z≈{0.860, 0.611}, both inside unit circle. ✓
 // ---------------------------------------------------------------------------
 struct DmmAntiAliasFilter {
-    using NodeBBr  = WdfSeriesAdaptor2<WdfResistor, WdfCapacitor>;
-    using C11Br    = WdfSeriesAdaptor2<WdfCapacitor, WdfIdealVoltageSource>;
-    using NodeAPar = WdfParallelAdaptor2<C11Br, NodeBBr>;
-    using SkTree   = WdfSeriesAdaptor2<WdfResistor, NodeAPar>;
+    float s1 = 0.0f, s2 = 0.0f;
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f;
 
     void init(float sampleRate) noexcept {
-        tree_.childA.init(51000.0f);                               // R13
-        tree_.childB.childA.childA.init(2.7e-9f, sampleRate);     // C11
-        tree_.childB.childA.childB.init();                         // Vs (no args)
-        tree_.childB.childB.childA.init(16000.0f);                 // R14
-        tree_.childB.childB.childB.init(2.7e-9f, sampleRate);     // C12
-        tree_.childB.childA.updatePortResistance();
-        tree_.childB.childB.updatePortResistance();
-        tree_.childB.updatePortResistance();
-        tree_.updatePortResistance();
-        opamp_.init(sampleRate);
-        opamp_.setRailVoltage(7.5f);
-        vOutPrev_ = 0.0f;
+        // Sallen-Key LPF BLT: ωc=1/(C·√(R1·R2)), Q=√(R1·R2)/(R1+R2), k=2·fs
+        // H(z) = (b0 + b1·z⁻¹ + b2·z⁻²) / (1 + a1·z⁻¹ + a2·z⁻²)
+        constexpr float R1 = 51000.0f, R2 = 16000.0f, Cap = 2.7e-9f;
+        const float sqrtR1R2 = sqrtf(R1 * R2);
+        const float wc  = 1.0f / (Cap * sqrtR1R2);   // angular cutoff (rad/s)
+        const float Q   = sqrtR1R2 / (R1 + R2);
+        const float k   = 2.0f * sampleRate;
+        const float k2  = k * k,  wc2 = wc * wc;
+        const float D   = k2 + (wc / Q) * k + wc2;
+        b0 = wc2 / D;  b1 = 2.0f * b0;  b2 = b0;
+        a1 = 2.0f * (wc2 - k2) / D;
+        a2 = (k2 - (wc / Q) * k + wc2) / D;
+        s1 = 0.0f;  s2 = 0.0f;
     }
 
     float process(float vin) noexcept {
-        tree_.childB.childA.childB.setVoltage(vOutPrev_);
-
-        tree_.reflect();
-        tree_.port.a = 2.0f * vin - tree_.port.b;
-        tree_.scatter();
-        tree_.childB.scatter();
-        tree_.childB.childA.scatter();  // update C11.port.a so its state evolves
-        tree_.childB.childB.scatter();
-
-        float vNodeB = tree_.childB.childB.childB.port.voltage();
-        vOutPrev_ = opamp_.process(vNodeB - vOutPrev_);
-        return vOutPrev_;
+        const float y = b0 * vin + s1;
+        s1 = b1 * vin - a1 * y + s2;
+        s2 = b2 * vin - a2 * y;
+        return y;
     }
 
-    void reset() noexcept {
-        tree_.reset();
-        opamp_.reset();
-        vOutPrev_ = 0.0f;
-    }
-
-private:
-    SkTree          tree_;
-    WdfOpAmpJRC4558 opamp_;
-    float           vOutPrev_ = 0.0f;
+    void reset() noexcept { s1 = 0.0f;  s2 = 0.0f; }
 };
 
 // ---------------------------------------------------------------------------
@@ -184,74 +161,45 @@ private:
 // IC5a RC4558 Sallen-Key LPF, fc ≈ 3.8 kHz (post-BBD reconstruction)
 // Component values: R27=16kΩ, R28=15kΩ, C16=C17=2.7nF
 //
-// Identical Sallen-Key WDF topology as DmmAntiAliasFilter.
-// fc is intentionally higher than the anti-alias filter — this is the
-// correct EH-7850 "warmth asymmetry" behavior; do not equalize.
+// fc intentionally higher than aaFilter — EH-7850 "warmth asymmetry"; keep as-is.
 //
-// Gain recovery:
-//   The BBD output is attenuated ~1/4.545× by the BBD interface circuitry.
-//   R29(39kΩ) and R30(11kΩ) form a non-inverting gain stage on IC5b that
-//   follows this filter. That stage is modeled here as a scalar post-multiply:
-//   kGainRecovery = 1 + 39k/11k ≈ 4.545
-//   (The IC5b stage is linear and not separately WDF-modeled.)
+// SESSION 3d FIX — same WDF Sallen-Key instability as DmmAntiAliasFilter.
+// H(s) = ωc² / (s² + (ωc/Q)·s + ωc²)
+//   fc = 1/(2π·C·√(R27·R28)) ≈ 3806 Hz, Q ≈ 0.500
+//   BLT with k=2·fs → poles at z≈{0.861, 0.682}, inside unit circle. ✓
 //
-// Port resistances (at 48kHz):
-//   C16,C17: Rp = 3,858 Ω each (same as DmmAntiAliasFilter)
-//   C16Br:   Rp = 3,858 Ω
-//   NodeBBr: Rp = 15,000 + 3,858 = 18,858 Ω
-//   NodeAPar: Rp = 3858||18858 = 3,107 Ω
-//   R27:     Rp = 16,000 Ω
-//   SkTree root: Rp = 16,000 + 3,107 = 19,107 Ω
+// Gain recovery: IC5b Av = 1 + R29/R30 = 1 + 39k/11k ≈ 4.545
+// Applied as scalar post-multiply (IC5b is linear).
 // ---------------------------------------------------------------------------
 struct DmmReconFilter {
-    using NodeBBr  = WdfSeriesAdaptor2<WdfResistor, WdfCapacitor>;
-    using C16Br    = WdfSeriesAdaptor2<WdfCapacitor, WdfIdealVoltageSource>;
-    using NodeAPar = WdfParallelAdaptor2<C16Br, NodeBBr>;
-    using SkTree   = WdfSeriesAdaptor2<WdfResistor, NodeAPar>;
+    float s1 = 0.0f, s2 = 0.0f;
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f;
+
+    static constexpr float kGainRecovery = 1.0f + 39000.0f / 11000.0f;  // 4.545
 
     void init(float sampleRate) noexcept {
-        tree_.childA.init(16000.0f);                               // R27
-        tree_.childB.childA.childA.init(2.7e-9f, sampleRate);     // C16
-        tree_.childB.childA.childB.init();                         // Vs
-        tree_.childB.childB.childA.init(15000.0f);                 // R28
-        tree_.childB.childB.childB.init(2.7e-9f, sampleRate);     // C17
-        tree_.childB.childA.updatePortResistance();
-        tree_.childB.childB.updatePortResistance();
-        tree_.childB.updatePortResistance();
-        tree_.updatePortResistance();
-        opamp_.init(sampleRate);
-        opamp_.setRailVoltage(7.5f);
-        vOutPrev_ = 0.0f;
+        constexpr float R1 = 16000.0f, R2 = 15000.0f, Cap = 2.7e-9f;
+        const float sqrtR1R2 = sqrtf(R1 * R2);
+        const float wc  = 1.0f / (Cap * sqrtR1R2);
+        const float Q   = sqrtR1R2 / (R1 + R2);
+        const float k   = 2.0f * sampleRate;
+        const float k2  = k * k,  wc2 = wc * wc;
+        const float D   = k2 + (wc / Q) * k + wc2;
+        b0 = wc2 / D;  b1 = 2.0f * b0;  b2 = b0;
+        a1 = 2.0f * (wc2 - k2) / D;
+        a2 = (k2 - (wc / Q) * k + wc2) / D;
+        s1 = 0.0f;  s2 = 0.0f;
     }
 
     float process(float vin) noexcept {
-        tree_.childB.childA.childB.setVoltage(vOutPrev_);
-
-        tree_.reflect();
-        tree_.port.a = 2.0f * vin - tree_.port.b;
-        tree_.scatter();
-        tree_.childB.scatter();
-        tree_.childB.childA.scatter();  // update C16.port.a so its state evolves
-        tree_.childB.childB.scatter();
-
-        float vNodeB = tree_.childB.childB.childB.port.voltage();
-        vOutPrev_ = opamp_.process(vNodeB - vOutPrev_);
-        return vOutPrev_ * kGainRecovery;
+        const float y = b0 * vin + s1;
+        s1 = b1 * vin - a1 * y + s2;
+        s2 = b2 * vin - a2 * y;
+        return y * kGainRecovery;
     }
 
-    void reset() noexcept {
-        tree_.reset();
-        opamp_.reset();
-        vOutPrev_ = 0.0f;
-    }
-
-private:
-    // Gain recovery for post-BBD IC5b stage: Av = 1 + R29/R30 = 1 + 39k/11k
-    static constexpr float kGainRecovery = 1.0f + 39000.0f / 11000.0f;
-
-    SkTree          tree_;
-    WdfOpAmpJRC4558 opamp_;
-    float           vOutPrev_ = 0.0f;
+    void reset() noexcept { s1 = 0.0f;  s2 = 0.0f; }
 };
 
 // ---------------------------------------------------------------------------
