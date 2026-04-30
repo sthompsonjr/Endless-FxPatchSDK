@@ -12,3 +12,4 @@ tests/reverb_primitives_test
 svf_test
 svf_test_O0
 biquad_test
+test_dmm
