@@ -39,9 +39,12 @@
 
 #include "wdf/DmmDelayCircuit.h"
 
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Clock and budget constants — 528 MHz actual / 48 kHz
@@ -461,21 +464,285 @@ static void runTest3_ParameterSweep() {
 }
 
 // ---------------------------------------------------------------------------
+// Pink noise state — Voss-McCartney 7-stage algorithm (file scope)
+// ---------------------------------------------------------------------------
+static float    s_pinkState[7]   = {};
+static uint32_t s_pinkCounter    = 0u;
+
+inline float nextPinkSample() noexcept {
+    static uint32_t lcg = 0x12345678u;
+    auto white = [&]() -> float {
+        lcg = lcg * 1664525u + 1013904223u;
+        return static_cast<float>(static_cast<int32_t>(lcg))
+               / static_cast<float>(0x80000000u);
+    };
+    ++s_pinkCounter;
+    for (int i = 0; i < 7; ++i) {
+        if ((s_pinkCounter & (1u << i)) == 0u) break;
+        s_pinkState[i] = white();
+    }
+    float sum = 0.0f;
+    for (int i = 0; i < 7; ++i) sum += s_pinkState[i];
+    return sum * (1.0f / 7.0f);
+}
+
+inline bool isDenormal(float x) noexcept {
+    uint32_t bits;
+    static_assert(sizeof(float) == sizeof(uint32_t));
+    __builtin_memcpy(&bits, &x, sizeof(bits));
+    uint32_t exponent = bits & 0x7F800000u;
+    uint32_t mantissa = bits & 0x007FFFFFu;
+    return (exponent == 0u) && (mantissa != 0u);
+}
+
+static void resetPinkNoise() noexcept {
+    for (auto& s : s_pinkState) s = 0.0f;
+    s_pinkCounter = 0u;
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Cycle count estimation
+// Clock: 528 MHz. Budget: 11,000 cycles/sample. Warmup: 48,000 samples.
+// Timed pass: 1,000,000 samples. FAIL > 60%, WARN > 40%, PASS <= 40%.
+// process(0.0f) with feedback=0 reflects realistic steady-state LFO cost.
+// ---------------------------------------------------------------------------
+static bool runTest4_CycleCount(DmmDelayCircuit& circuit) {
+    std::printf("\n--- Test 4: Cycle Count Estimation ---\n");
+
+    circuit.setDelayKnob(0.5f);
+    circuit.setFeedbackKnob(0.0f);
+    circuit.setModeKnob(0.0f);
+    circuit.setRunawayMode(false);
+
+    // Warmup pass — prevent cold-start cache bias
+    for (int i = 0; i < 48000; ++i)
+        (void)circuit.process(0.0f);
+
+    // Timed pass — volatile sink prevents dead-store elimination
+    constexpr int kTimingIterations = 1'000'000;
+    volatile float sink = 0.0f;
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < kTimingIterations; ++i)
+        sink = circuit.process(0.0f);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    (void)sink;
+
+    auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    double mean_cycles = static_cast<double>(elapsed_ns) * 528'000'000.0
+                         / 1'000'000'000.0 / static_cast<double>(kTimingIterations);
+    double budget_pct  = mean_cycles / 11000.0 * 100.0;
+
+    std::printf("Test 4 — Cycle Count Estimation\n");
+    std::printf("  Iterations:         %d\n", kTimingIterations);
+    std::printf("  Elapsed:            %lld ns\n", static_cast<long long>(elapsed_ns));
+    std::printf("  Mean cycles/sample: %.1f  (528 MHz assumed)\n", mean_cycles);
+    std::printf("  Budget consumed:    %.1f%%  (budget = 11,000 cycles @ 528 MHz)\n",
+                budget_pct);
+
+    if (budget_pct > 60.0)
+        std::printf("FAIL: Test 4 — exceeds 60%% cycle budget (%.1f%%)\n", budget_pct);
+    else if (budget_pct > 40.0)
+        std::printf("WARN: Test 4 — exceeds 40%% cycle budget (%.1f%%)\n", budget_pct);
+    check(budget_pct <= 60.0, "cycle_count: within 60pct cycle budget");
+
+    return budget_pct <= 60.0;
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Numerical precision — 10 seconds pink noise at -6 dBFS
+// P1: no NaN (hard fail). P2: no Inf (hard fail).
+// P3: no denormals (WARN only — does not affect return value).
+// Non-zero feedback exercises the feedback path for denormal accumulation.
+// ---------------------------------------------------------------------------
+static bool runTest5_NumericalPrecision(DmmDelayCircuit& circuit) {
+    std::printf("\n--- Test 5: Numerical Precision ---\n");
+
+    circuit.init(kSampleRateF, s_workingBuffer, kWorkBufSize);
+    resetPinkNoise();
+    circuit.setDelayKnob(0.3f);
+    circuit.setFeedbackKnob(0.3f);
+    circuit.setModeKnob(0.0f);
+    circuit.setRunawayMode(false);
+
+    int nanCount    = 0;
+    int infCount    = 0;
+    int denormCount = 0;
+
+    for (int n = 0; n < 480'000; ++n) {
+        float x = 0.5f * nextPinkSample();
+        float y = circuit.process(x);
+        if (std::isnan(y))      ++nanCount;
+        else if (std::isinf(y)) ++infCount;
+        else if (isDenormal(y)) ++denormCount;
+    }
+
+    std::printf("Test 5 — Numerical Precision (10 seconds pink noise @ -6 dBFS)\n");
+    std::printf("  NaN outputs:      %d\n", nanCount);
+    std::printf("  Inf outputs:      %d\n", infCount);
+    std::printf("  Denormal outputs: %d\n", denormCount);
+
+    bool p1 = (nanCount == 0);
+    bool p2 = (infCount == 0);
+    bool p3 = (denormCount == 0);
+
+    if (!p1) std::printf("  FAIL: P1 — %d NaN outputs detected\n", nanCount);
+    check(p1, "precision: P1 no NaN outputs");
+
+    if (!p2) std::printf("  FAIL: P2 — %d Inf outputs detected\n", infCount);
+    check(p2, "precision: P2 no Inf outputs");
+
+    if (!p3) {
+        std::printf("  WARN: P3 — %d denormal outputs detected\n", denormCount);
+        std::printf("        Recommendation: add _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON)\n");
+        std::printf("        or equivalent ARM VFP FTZ bit in the production init().\n");
+        std::printf("        Denormals do not corrupt output but inflate cycle cost ~10x\n");
+        std::printf("        on Cortex-M7 when FTZ is not set.\n");
+    }
+    check(true, "precision: P3 denormals (WARN only, counted as pass)");
+
+    return p1 && p2;
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: A/B comparison (conditional — requires argv[1] reference file)
+// Reference format: raw IEEE 754 float32 LE mono 48000 Hz, no header.
+// Must have been generated with delay=0.3, feedback=0.0, mode=0.0,
+// runaway=false, using this harness's LCG pink noise (seed 0x12345678).
+// If reference is from LTSpice or hardware, comparison will not be meaningful.
+// A-weighted error requires FFT; deferred to post-processing.
+// Target: RMS error < -40 dB (linear BBD path). WARN < -20 dB. FAIL >= -20 dB.
+// ---------------------------------------------------------------------------
+static bool runTest6_ABComparison(DmmDelayCircuit& circuit, const char* refPath) {
+    std::printf("\n--- Test 6: A/B Comparison ---\n");
+    std::printf("  NOTE: Reference must be raw float32 LE mono at 48000 Hz (no header).\n");
+    std::printf("  NOTE: Settings assumed: delay=0.3, feedback=0.0, mode=0.0, runaway=false.\n");
+    std::printf("        LCG pink noise seed 0x12345678. If from LTSpice/hardware,\n");
+    std::printf("        this comparison will not be meaningful.\n");
+
+    FILE* f = std::fopen(refPath, "rb");
+    if (!f) {
+        std::printf("FAIL: Test 6 — cannot open %s\n", refPath);
+        check(false, "ab_comparison: reference file opened");
+        return false;
+    }
+    std::fseek(f, 0, SEEK_END);
+    long fileBytes = std::ftell(f);
+    std::rewind(f);
+    int numSamples = static_cast<int>(fileBytes / static_cast<long>(sizeof(float)));
+    if (numSamples <= 0) {
+        std::fclose(f);
+        std::printf("FAIL: Test 6 — reference file empty or too small (%ld bytes)\n", fileBytes);
+        check(false, "ab_comparison: reference file non-empty");
+        return false;
+    }
+    // std::vector permitted in test harness for unknown-length reference buffer
+    std::vector<float> refBuf(static_cast<size_t>(numSamples));
+    size_t nRead = std::fread(refBuf.data(), sizeof(float), static_cast<size_t>(numSamples), f);
+    if (nRead != static_cast<size_t>(numSamples))
+        std::printf("  WARN: fread returned %zu of %d expected samples\n", nRead, numSamples);
+    std::fclose(f);
+    std::printf("  Loaded %d samples (%.2f s) from %s\n",
+                numSamples, static_cast<float>(numSamples) / kSampleRateF, refPath);
+
+    circuit.init(kSampleRateF, s_workingBuffer, kWorkBufSize);
+    circuit.setDelayKnob(0.3f);
+    circuit.setFeedbackKnob(0.0f);
+    circuit.setModeKnob(0.0f);
+    circuit.setRunawayMode(false);
+    resetPinkNoise();
+
+    std::vector<float> outBuf(static_cast<size_t>(numSamples));
+    for (int n = 0; n < numSamples; ++n) {
+        float x   = 0.5f * nextPinkSample();
+        outBuf[n] = circuit.process(x);
+    }
+
+    // Error computation — double accumulation avoids catastrophic cancellation
+    // over long buffers. A-weighted error requires FFT; deferred to post-processing.
+    double sumSqErr = 0.0;
+    float  peakErr  = 0.0f;
+    for (int n = 0; n < numSamples; ++n) {
+        float err = refBuf[n] - outBuf[n];
+        sumSqErr += static_cast<double>(err) * static_cast<double>(err);
+        float absErr = fabsf(err);
+        if (absErr > peakErr) peakErr = absErr;
+    }
+    double rmsErr    = std::sqrt(sumSqErr / static_cast<double>(numSamples));
+    float  rmsErrDb  = 20.0f * log10f(static_cast<float>(rmsErr) + 1e-12f);
+    float  peakErrDb = 20.0f * log10f(peakErr + 1e-12f);
+
+    std::printf("  Unweighted RMS error: %.1f dB\n", rmsErrDb);
+    std::printf("  Peak error:           %.1f dB\n", peakErrDb);
+    std::printf("  Note: A-weighted error requires FFT; deferred to post-processing.\n");
+
+    FILE* csv = std::fopen("tests/dmm_ab_comparison.csv", "w");
+    if (!csv) csv = std::fopen("dmm_ab_comparison.csv", "w");
+    if (csv) {
+        // A-weighted error requires FFT; deferred to post-processing.
+        std::fprintf(csv,
+                     "num_samples,rms_error_linear,rms_error_db,"
+                     "peak_error_linear,peak_error_db\n");
+        std::fprintf(csv, "%d,%.8e,%.4f,%.8e,%.4f\n",
+                     numSamples, rmsErr, rmsErrDb,
+                     static_cast<double>(peakErr), peakErrDb);
+        std::fclose(csv);
+        std::printf("  CSV written: tests/dmm_ab_comparison.csv\n");
+    }
+
+    if (rmsErrDb >= -20.0f)
+        std::printf("FAIL: Test 6 — RMS error %.1f dB (exceeds -20 dB floor)\n", rmsErrDb);
+    else if (rmsErrDb >= -40.0f)
+        std::printf("WARN: Test 6 — RMS error %.1f dB (acceptable for nonlinear; "
+                    "BBD path expected < -40 dB)\n", rmsErrDb);
+    check(rmsErrDb < -20.0f, "ab_comparison: RMS error < -20 dB floor");
+
+    return rmsErrDb < -20.0f;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-int main() {
+int main(int argc, char* argv[]) {
     std::printf("==========================================\n");
     std::printf(" EHX Deluxe Memory Man — WDF Test Suite\n");
-    std::printf(" Session 3d: Tests 1-3\n");
+    std::printf(" Session 3e: Tests 1-6\n");
     std::printf("==========================================\n");
 
+    // Tests 1-3 return void and accumulate into totalTests/passedTests.
+    // Snapshot counters before/after each test to derive per-test bool for summary.
+    int c0, p0;
+
+    c0 = totalTests; p0 = passedTests;
     runTest1_FrequencyResponse();
+    bool t1 = (passedTests - p0) == (totalTests - c0);
+
+    c0 = totalTests; p0 = passedTests;
     runTest2_ImpulseStability();
+    bool t2 = (passedTests - p0) == (totalTests - c0);
+
+    c0 = totalTests; p0 = passedTests;
     runTest3_ParameterSweep();
+    bool t3 = (passedTests - p0) == (totalTests - c0);
 
-    const int failed = totalTests - passedTests;
-    std::printf("\n=== DMM TEST RESULTS: %d passed, %d failed ===\n",
-                passedTests, failed);
+    DmmDelayCircuit circuit = makeFreshCircuit();
 
-    return (failed == 0) ? 0 : 1;
+    bool t4 = runTest4_CycleCount(circuit);
+    bool t5 = runTest5_NumericalPrecision(circuit);
+    bool t6 = true;
+    if (argc >= 2) {
+        t6 = runTest6_ABComparison(circuit, argv[1]);
+    } else {
+        std::printf("Test 6 — A/B Comparison: SKIP (no reference file; pass path as argv[1])\n");
+    }
+
+    std::printf("\n=== DMM WDF TEST HARNESS SUMMARY ===\n");
+    std::printf("Test 1 (Freq Response):     %s\n", t1 ? "PASS" : "FAIL");
+    std::printf("Test 2 (Impulse Stability): %s\n", t2 ? "PASS" : "FAIL");
+    std::printf("Test 3 (Param Sweep):       %s\n", t3 ? "PASS" : "FAIL");
+    std::printf("Test 4 (Cycle Count):       %s\n", t4 ? "PASS" : "FAIL");
+    std::printf("Test 5 (Precision):         %s\n", t5 ? "PASS" : "FAIL");
+    std::printf("Test 6 (A/B Compare):       %s\n", t6 ? "PASS/SKIP" : "FAIL");
+    bool allPassed = t1 && t2 && t3 && t4 && t5 && t6;
+    std::printf("Overall: %s\n", allPassed ? "PASS" : "FAIL");
+    return allPassed ? 0 : 1;
 }
