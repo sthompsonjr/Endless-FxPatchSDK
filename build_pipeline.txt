@@ -1,6 +1,6 @@
 BUILD PIPELINE — WHAT TO BUILD NEXT
 ======================================
-Last updated: 2026-04-20
+Last updated: 2026-05-06
 
 Prioritized implementation candidates. Maintained by the user.
 The project assistant consults this when recommending next builds.
@@ -49,6 +49,16 @@ Soft Focus (SPX500)                                [DONE] 2026-03-18
   recording buffer, GrainScheduler with envelope control, Lfo modulation.
   Implemented in dsp/SoftFocusCircuit.h, effects/PatchImpl_SoftFocus.cpp.
   Verified 2026-03-18.
+
+EHX Deluxe Memory Man (EH-7850)                    [DONE] 2026-05-06
+  Full BBD delay emulation: input HPF (RC4558 non-inverting buffer, Av≈3.14×,
+  16 Hz HPF), NE570 compander (DmmCompressor 2:1, DmmExpander 1:2), AnalogLfo
+  modulation (Chorus/Vibrato modes, 3 Hz/6 Hz LFO), feedback loop with Runaway
+  mode (0.92× gain cap for self-oscillation). Delay range 82–550 ms.
+  Implemented in wdf/DmmDelayCircuit.h, effects/PatchImpl_DeluxeMemoryMan.cpp.
+  Test harness: tests/test_DeluxeMemoryMan_wdf.cpp — 6 tests, all passing.
+  Cycle cost: ~53 cycles/sample (0.5% of 11,000-cycle budget @ 528 MHz).
+  Verified 2026-05-06.
 
 ---
 
