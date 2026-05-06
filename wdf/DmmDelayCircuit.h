@@ -66,14 +66,43 @@
 
 struct DmmDelayCircuit {
     // Signal chain members — value-type, no heap
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmInputBuffer     inputBuf;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmAntiAliasFilter aaFilter;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmReconFilter     reconFilter;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmOutputBuffer    outputBuf;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmCompressor      compressor;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmExpander        expander;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
+    // NOTE: Internal BBDLine<32768> CircularBuffer is BSS-allocated (EXT-RAM
+    // latency equivalent) — delay line storage itself cannot be in DTCM.
     DmmBbdCore         bbdCore;
+
+    // [DTCM] Hot path: read and written every process() call.
+    // Place in DTCM for lowest-latency access on Cortex-M7.
     DmmFeedbackLoop    feedbackLoop;
+
+    // [CONTROL-RATE] Not on the per-sample hot path. DTCM placement
+    // optional; prioritize space for hot-path members.
     ParameterSmoother  modeSmooth;   // 10 ms smooth for chorus/vibrato transitions
 
     // init() in signal-chain order.
