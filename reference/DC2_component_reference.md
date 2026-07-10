@@ -348,7 +348,7 @@ interchangeable per part note 2.
 
 | # | Item | Blueshift | Factory scan | Resolution |
 |---|---|---|---|---|
-| 1 | **Factory scan file `BBSS2501411.pdf`** | — | File contains a *Behavioral and Brain Sciences* manuscript ("A speculative argument against consciousness in AI", N. Block), 8 pages, **no schematic content on any page** | **[FACTORY SCAN UNAVAILABLE — WRONG FILE UPLOADED].** Cross-check not performed. Blueshift redraw stands as sole authority (it is the designated working authority). User must supply the correct Boss DC-2 factory scan; re-audit then. |
+| 1 | **Factory scan file `BBSS2501411.pdf`** | — | File contained a *Behavioral and Brain Sciences* manuscript ("A speculative argument against consciousness in AI", N. Block), 8 pages, **no schematic content on any page**; removed from `reference/` 2026-07-10 at user request | **[FACTORY SCAN UNAVAILABLE — WRONG FILE UPLOADED, SINCE REMOVED].** Cross-check not performed. Blueshift redraw stands as sole authority (it is the designated working authority). User must supply the correct Boss DC-2 factory scan; re-audit then. |
 | 2 | BOM lists MODE2 as SPDT, MODE3/MODE4 as DPDT | Schematic shows MODE2 with one pole (depth side only); MODE3A/B and MODE4A/B poles on depth/rate sides | consistent | No action |
 | 3 | R80/R81 printed "180K" in schematic, "180k" in BOM | same value | — | No action |
 
