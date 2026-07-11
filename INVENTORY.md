@@ -63,6 +63,7 @@ Endless-FxPatchSDK/
 │   ├── Saturation.h                  ← softClip (Padé), hardClip, fold, drive
 │   ├── SoftFocusCircuit.h            ← Yamaha SPX500 shimmer reverb (grain + FDN)
 │   ├── StateVariableFilter.h         ← VA-modeled SVF with soft saturation
+│   ├── TriPhaseLfo.h                 ← Multi-tap LFO, single master accumulator (drift-invariant tap spacing)
 │   ├── UniVibeLfo.h                  ← Shin-Ei Uni-Vibe incandescent + 4-LDR model
 │   └── WindowedSincInterpolator.h    ← 16-tap Blackman-Harris windowed sinc
 │
@@ -117,7 +118,12 @@ Endless-FxPatchSDK/
 │   ├── DmmCircuits.h                 ← DmmInputBuffer, DmmAntiAliasFilter, DmmReconFilter, DmmOutputBuffer
 │   ├── DmmBbdCore.h                  ← BBDLine<32768> + AnalogLfo modulation core
 │   ├── DmmFeedbackLoop.h             ← Feedback state: DmmFeedbackEq IIR + polarity inversion + soft-clip
-│   └── DmmDelayCircuit.h             ← EH-7850 complete signal chain (top-level, 2026-05-06)
+│   ├── DmmDelayCircuit.h             ← EH-7850 complete signal chain (top-level, 2026-05-06)
+│   │
+│   │  ── TriDimension Signal Chain (TSC + DC-2) ──
+│   ├── Dc2Filters.h                  ← DC-2 Session 1 filters (input buffer, pre-emphasis, AA/recon LPF, dry LPF, output mixer)
+│   ├── Dc2Circuit.h                  ← Boss DC-2 Dimension C complete circuit (NE570 compander, 2× BBD antiphase, cross-feedback)
+│   └── TscCircuit.h                  ← Dytronics Tri-Stereo Chorus voice (WDF input coupling, 3× BBD, dual TriPhaseLfo)
 │
 ├── effects/                          ← Complete effect implementations
 │   ├── PatchImpl_BigMuff.cpp          ← EHX Big Muff Pi (3 variants, 2026-03-15)
@@ -129,6 +135,7 @@ Endless-FxPatchSDK/
 │   ├── PatchImpl_Rangemaster.cpp      ← Dallas Rangemaster Treble Booster
 │   ├── PatchImpl_Rat.cpp              ← ProCo RAT Distortion (5 variants)
 │   ├── PatchImpl_SoftFocus.cpp        ← Yamaha SPX500 Shimmer Reverb (2026-03-18)
+│   ├── PatchImpl_TriDimension.cpp     ← Tri-Stereo Chorus + Boss DC-2 dual-unit patch (2026-07-11)
 │   ├── PatchImpl_Tubescreamer.cpp     ← Ibanez TS808/TS9/Klon Overdrives
 │   ├── PatchImpl_Wah.cpp              ← Cry Baby Wah (manual + envelope + LFO)
 │   └── PowerPuffParams.h             ← Power Puff parameter definitions (new 2026-04-20)
@@ -164,7 +171,12 @@ Endless-FxPatchSDK/
     ├── ReverbPrimitives_test.cpp     ← CombFilter, Hadamard FDN blocks
     ├── wah_test.cpp                  ← CryBabyCircuit
     ├── test_DeluxeMemoryMan_wdf.cpp  ← DmmDelayCircuit; 6 tests (freq sweep, impulse, param sweep, cycle count, precision, A/B) — COMPILES OK
-    └── power_puff_test.cpp           ← PatchImpl_PowerPuff (COMPILES OK; link with effects/PatchImpl_PowerPuff.cpp)
+    ├── power_puff_test.cpp           ← PatchImpl_PowerPuff (COMPILES OK; link with effects/PatchImpl_PowerPuff.cpp)
+    ├── test_TriPhaseLfo.cpp          ← TriPhaseLfo; 5 tests (spacing, DC2 mode, blend, range, bench) — PASSING
+    ├── dc2_filters_test.cpp          ← Dc2Filters Session 1 self-tests — PASSING
+    ├── dc2_circuit_test.cpp          ← Dc2Circuit self-tests (compander identity, motionless CV, modes) — PASSING
+    ├── tsc_circuit_test.cpp          ← TscCircuit self-tests (coupling, CV spacing, monotonicity) — PASSING
+    └── test_TriDimension_wdf.cpp     ← Full TriDimension patch harness; 8 tests (link with effects/PatchImpl_TriDimension.cpp) — PASSING (Test 6 A/B SKIPPED pending reference)
 ```
 
 ---
@@ -562,6 +574,16 @@ Endless-FxPatchSDK/
 **Cycle cost:** ~53 cycles/sample mean (0.5% of 11,000-cycle budget at 528 MHz operational clock)
 **Verified:** 2026-05-06
 
+### `PatchImpl_TriDimension` — Tri-Stereo Chorus + Boss DC-2 (TriDimension)
+**Circuits:** TscCircuit (`wdf/TscCircuit.h`), Dc2Circuit (`wdf/Dc2Circuit.h`, filters in `wdf/Dc2Filters.h`, modulation in `dsp/TriPhaseLfo.h`)
+**Virtual controls (heel/toe expression morph array):** v0 DC-2 mode (4-position) | v1 TSC rate (0.03–7.45 Hz, log) | v2 routing (TSC→DC2 series / DC2→TSC series / parallel; 0.02 hysteresis, 512-sample equal-power crossfade) | v3/v4/v5 TSC intensity L/C/R
+**Hardware map:** base-layer knobs 0–2 → v0–v2; hold layer → v3–v5 (left footswitch hold, latched, soft takeover); expression pedal = heel/toe snapshot morph
+**Footswitch:** Left press toggles DC-2 enable through the crossfade; left hold toggles the knob layer
+**LED:** kLightBlueColor (base) / kLightYellow (hold); DC-2 disabled = 50 ms dim-blink (kDimBlue / kDimYellow) once per second
+**Test:** tests/test_TriDimension_wdf.cpp — COMPILES OK; Tests 1–5, 7–8 passing, Test 6 (A/B) SKIPPED pending reference PCM (ear-matching pass owned by the user)
+**Cycle cost:** ~144 cycles/sample measured mean, worst case (series routing, DC-2 on, intensities 1.0; worst block 218) ≈ typical (parallel routing) — 1.3% of the 11,000-cycle budget at 528 MHz operational clock; both units run every sample by design, so the cost is routing-invariant
+**Verified:** 2026-07-11
+
 ---
 
 ## Compiler Constraints & Architecture
@@ -641,7 +663,16 @@ Endless-FxPatchSDK/
    - **Right footswitch:** Bypass (handled by firmware, not patch code)
    - **LED color:** Returns int 0xRRGGBB from `getLedColor()`
 
-9. **EHX Deluxe Memory Man (EH-7850) implemented 2026-05-06.** Full signal chain: input
+9. **TriDimension (Tri-Stereo Chorus + Boss DC-2) implemented 2026-07-11** (sessions 1–6).
+   Dytronics Tri-Stereo Chorus voice (`wdf/TscCircuit.h`: WDF input coupling, 3× BBDLine<1024>,
+   dual drift-independent TriPhaseLfo<3> generators at 120° tap spacing) + Boss DC-2 Dimension C
+   (`wdf/Dc2Circuit.h` / `wdf/Dc2Filters.h`: Aion Blueshift transcription, shared NE570 compressor
+   + per-channel expanders, two antiphase-modulated BBDLine<1024>, bridged-T cross-feedback)
+   composed behind a three-zone routing knob in `effects/PatchImpl_TriDimension.cpp`.
+   Test harness `tests/test_TriDimension_wdf.cpp`: Tests 1–5, 7–8 passing; Test 6 (A/B) skipped
+   pending reference recordings. Measured ~144 cycles/sample (1.3% of budget @ 528 MHz).
+
+10. **EHX Deluxe Memory Man (EH-7850) implemented 2026-05-06.** Full signal chain: input
    HPF (RC4558 non-inverting buffer, Av≈3.14×, 16 Hz HPF), BBD delay (82–550 ms,
    MN3005×2 emulation via BBDLine<32768>), NE570 compander emulation (DmmCompressor 2:1
    + DmmExpander 1:2), AnalogLfo modulation (Chorus/Vibrato modes), feedback loop with
