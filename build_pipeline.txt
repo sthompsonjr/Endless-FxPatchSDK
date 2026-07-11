@@ -60,6 +60,27 @@ EHX Deluxe Memory Man (EH-7850)                    [DONE] 2026-05-06
   Cycle cost: ~53 cycles/sample (0.5% of 11,000-cycle budget @ 528 MHz).
   Verified 2026-05-06.
 
+TriDimension (Tri-Stereo Chorus + Boss DC-2)       [DONE] 2026-07-11
+  Dytronics Tri-Stereo Chorus voice (TscCircuit: WDF input coupling, 3×
+  BBDLine<1024>, dual drift-independent TriPhaseLfo<3> generators, 120° tap
+  spacing) + Boss DC-2 Dimension C (Dc2Circuit: Aion Blueshift transcription,
+  shared NE570 compressor + per-channel expanders, two antiphase-modulated
+  BBDLine<1024>, bridged-T cross-feedback) behind a three-zone routing knob
+  (TSC→DC2 / DC2→TSC / parallel, 512-sample equal-power crossfade). Six
+  virtual controls on a heel/toe expression morph array with soft takeover.
+  Implemented in dsp/TriPhaseLfo.h, wdf/Dc2Filters.h, wdf/Dc2Circuit.h,
+  wdf/TscCircuit.h, effects/PatchImpl_TriDimension.cpp (sessions 1–6).
+  Test harness: tests/test_TriDimension_wdf.cpp — Tests 1–5, 7–8 passing
+  (freq response, impulse stability, param sweep, cycle count, precision,
+  DC-2 motionless mono-sum, TSC 120° phase spacing); Test 6 (A/B) SKIPPED
+  pending reference recordings (ear-matching pass owned by the user; log
+  constant changes in the reference doc and re-run Sessions 3/4 self-tests
+  plus this harness).
+  Cycle cost: ~144 cycles/sample measured mean (1.3% of 11,000-cycle budget
+  @ 528 MHz); worst case (series, DC-2 on, intensities 1.0) ≈ typical
+  (parallel) — both units run every sample by design.
+  Verified 2026-07-11.
+
 ---
 
 TIER 2 — STANDARD EFFECTS (EXISTING CIRCUITS, NO NEW MODELS)
